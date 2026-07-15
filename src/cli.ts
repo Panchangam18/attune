@@ -1,48 +1,37 @@
 #!/usr/bin/env node
 
-import { readFileSync, writeFileSync, mkdirSync, existsSync } from 'fs';
-import { join, resolve, dirname } from 'path';
-import { homedir } from 'os';
-import { fileURLToPath } from 'url';
+import { existsSync, readFileSync } from 'fs';
+import { resolve } from 'path';
+import { setStylesheetSource } from './config.js';
 import { scanForElectronApps, findApp, getAppId } from './scan.js';
-import { patch, unpatch } from './patch.js';
-
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = dirname(__filename);
-
-const ATTUNE_DIR = join(homedir(), '.attune');
-const CONFIG_DIR = join(ATTUNE_DIR, 'config');
-
-// The preload script lives alongside the compiled CLI (or in src/injection during dev)
-function getPreloadPath(): string {
-  // Check for the source file first (dev mode with tsx)
-  const devPath = join(__dirname, 'injection', 'attune-preload.js');
-  if (existsSync(devPath)) return devPath;
-
-  // Built mode: injection/ is excluded from tsc, so it stays in src/
-  const srcPath = join(__dirname, '..', 'src', 'injection', 'attune-preload.js');
-  if (existsSync(srcPath)) return srcPath;
-
-  throw new Error('Could not find attune-preload.js');
-}
+import { getSession, launch, runWatcher, stopSession } from './session.js';
 
 const [, , command, ...args] = process.argv;
+void main(command, args);
 
-switch (command) {
-  case 'scan':
-    cmdScan();
-    break;
-  case 'patch':
-    cmdPatch(args[0]);
-    break;
-  case 'unpatch':
-    cmdUnpatch(args[0]);
-    break;
-  case 'set-css':
-    cmdSetCSS(args[0], args[1]);
-    break;
-  default:
-    printUsage();
+async function main(command: string | undefined, args: string[]) {
+  switch (command) {
+    case 'scan':
+      cmdScan();
+      break;
+    case 'set-css':
+      cmdSetCSS(args[0], args[1]);
+      break;
+    case 'launch':
+      await cmdLaunch(args[0]);
+      break;
+    case 'stop':
+      cmdStop(args[0]);
+      break;
+    case 'status':
+      cmdStatus(args[0]);
+      break;
+    case '_watch':
+      await cmdWatch(args[0], args[1], args[2]);
+      break;
+    default:
+      printUsage();
+  }
 }
 
 function cmdScan() {
@@ -54,64 +43,11 @@ function cmdScan() {
 
   console.log(`Found ${apps.length} Electron app(s):\n`);
   for (const app of apps) {
-    const status = app.isPatched ? '[PATCHED]' : '[       ]';
     const id = getAppId(app);
-    console.log(`  ${status}  ${app.name}`);
-    console.log(`           ID: ${id}`);
-    console.log(`           Path: ${app.path}`);
+    console.log(`  ${app.name}`);
+    console.log(`    ID: ${id}`);
+    console.log(`    Path: ${app.path}`);
     console.log('');
-  }
-}
-
-function cmdPatch(query: string | undefined) {
-  if (!query) {
-    console.error('Usage: attune patch <app-name>');
-    process.exit(1);
-  }
-
-  const apps = scanForElectronApps();
-  const app = findApp(apps, query);
-
-  if (!app) {
-    console.error(`No Electron app found matching "${query}".`);
-    console.error('Run "attune scan" to see available apps.');
-    process.exit(1);
-  }
-
-  const appId = getAppId(app);
-
-  try {
-    patch(app.resourcesPath, appId, getPreloadPath());
-    console.log(`Patched "${app.name}" successfully.`);
-    console.log(`App ID: ${appId}`);
-    console.log(`\nNext: set custom CSS with:`);
-    console.log(`  attune set-css "${app.name}" <path-to-css-file>`);
-  } catch (e: unknown) {
-    console.error(`Failed to patch "${app.name}":`, (e as Error).message);
-    process.exit(1);
-  }
-}
-
-function cmdUnpatch(query: string | undefined) {
-  if (!query) {
-    console.error('Usage: attune unpatch <app-name>');
-    process.exit(1);
-  }
-
-  const apps = scanForElectronApps();
-  const app = findApp(apps, query);
-
-  if (!app) {
-    console.error(`No Electron app found matching "${query}".`);
-    process.exit(1);
-  }
-
-  try {
-    unpatch(app.resourcesPath);
-    console.log(`Unpatched "${app.name}" successfully. Original app restored.`);
-  } catch (e: unknown) {
-    console.error(`Failed to unpatch "${app.name}":`, (e as Error).message);
-    process.exit(1);
   }
 }
 
@@ -138,24 +74,81 @@ function cmdSetCSS(query: string | undefined, cssFilePath: string | undefined) {
   const css = readFileSync(resolvedPath, 'utf-8');
   const appId = getAppId(app);
 
-  mkdirSync(CONFIG_DIR, { recursive: true });
-  const configPath = join(CONFIG_DIR, `${appId}.json`);
-
-  const config = existsSync(configPath)
-    ? JSON.parse(readFileSync(configPath, 'utf-8'))
-    : { css: '', enabled: true };
-
-  config.css = css;
-  writeFileSync(configPath, JSON.stringify(config, null, 2));
+  setStylesheetSource(appId, resolvedPath, css);
 
   console.log(`CSS saved for "${app.name}" (${css.length} chars).`);
 
-  if (!app.isPatched) {
-    console.log(`\nNote: "${app.name}" is not patched yet. Run:`);
-    console.log(`  attune patch "${app.name}"`);
-  } else {
-    console.log(`\nRestart "${app.name}" to see the changes.`);
+  console.log(`\nLaunch it with Attune to apply this stylesheet:`);
+  console.log(`  attune launch "${app.name}"`);
+}
+
+async function cmdLaunch(query: string | undefined) {
+  if (!query) {
+    console.error('Usage: attune launch <app-name>');
+    process.exit(1);
   }
+
+  const app = findApp(scanForElectronApps(), query);
+  if (!app) {
+    console.error(`No Electron app found matching "${query}".`);
+    process.exit(1);
+  }
+
+  try {
+    const { port } = await launch(app, process.argv[1]);
+    console.log(`Launched "${app.name}" with Attune on localhost:${port}.`);
+    console.log('Stylesheet edits will apply automatically while this session is open.');
+  } catch (e: unknown) {
+    console.error(`Failed to launch "${app.name}":`, (e as Error).message);
+    process.exit(1);
+  }
+}
+
+function cmdStop(query: string | undefined) {
+  if (!query) {
+    console.error('Usage: attune stop <app-name>');
+    process.exit(1);
+  }
+
+  const app = findApp(scanForElectronApps(), query);
+  if (!app) {
+    console.error(`No Electron app found matching "${query}".`);
+    process.exit(1);
+  }
+
+  const stopped = stopSession(getAppId(app));
+  console.log(stopped ? `Stopped Attune for "${app.name}".` : `No Attune session is running for "${app.name}".`);
+}
+
+function cmdStatus(query: string | undefined) {
+  if (!query) {
+    console.error('Usage: attune status <app-name>');
+    process.exit(1);
+  }
+
+  const app = findApp(scanForElectronApps(), query);
+  if (!app) {
+    console.error(`No Electron app found matching "${query}".`);
+    process.exit(1);
+  }
+
+  const session = getSession(getAppId(app));
+  if (!session) {
+    console.log(`No Attune session is running for "${app.name}".`);
+    return;
+  }
+
+  const targetLabel = session.targetCount === 1 ? 'target' : 'targets';
+  console.log(`Attune for "${app.name}": ${session.status} (${session.targetCount} page ${targetLabel})`);
+}
+
+async function cmdWatch(configPath: string | undefined, rawPort: string | undefined, sessionPath: string | undefined) {
+  const port = Number(rawPort);
+  if (!configPath || !sessionPath || !Number.isInteger(port) || port <= 0 || port > 65535) {
+    process.exit(1);
+  }
+
+  await runWatcher(configPath, port, sessionPath);
 }
 
 function printUsage() {
@@ -164,8 +157,9 @@ attune — Dynamic UI customization for Electron apps
 
 Usage:
   attune scan                        Scan for Electron apps on the system
-  attune patch <app-name>            Inject Attune into an Electron app
-  attune unpatch <app-name>          Remove Attune and restore the original app
-  attune set-css <app-name> <file>   Set custom CSS for a patched app
+  attune set-css <app-name> <file>   Set custom CSS for an app
+  attune launch <app-name>           Launch without modifying the app bundle
+  attune status <app-name>           Show an Attune session
+  attune stop <app-name>             Stop applying styles to a session
 `);
 }

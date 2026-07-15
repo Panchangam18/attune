@@ -1,0 +1,4 @@
+interface:
+  display_name: "Attune"
+  short_description: "Style Electron desktop apps safely"
+  default_prompt: "Use $attune to restyle an installed Electron app with live CSS."

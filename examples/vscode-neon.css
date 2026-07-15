@@ -1,0 +1,62 @@
+/* A deliberately dramatic Attune demo for VS Code's workbench. */
+body {
+  --vscode-editor-background: #090b12 !important;
+  --vscode-editor-foreground: #e9f7ff !important;
+  --vscode-sideBar-background: #121322 !important;
+  --vscode-sideBar-foreground: #d7d9ff !important;
+  --vscode-activityBar-background: #ff2e88 !important;
+  --vscode-activityBar-foreground: #ffffff !important;
+  --vscode-statusBar-background: #10c989 !important;
+  --vscode-statusBar-foreground: #06130f !important;
+  --vscode-titleBar-activeBackground: #231747 !important;
+  --vscode-titleBar-activeForeground: #ffffff !important;
+  --vscode-list-activeSelectionBackground: #5634b6 !important;
+  --vscode-list-hoverBackground: #2a2251 !important;
+  --vscode-focusBorder: #42f5c5 !important;
+}
+
+.monaco-workbench {
+  background: #090b12 !important;
+  font-family: "SF Mono", Menlo, Monaco, monospace !important;
+}
+
+.monaco-workbench .part {
+  border-color: #674dce !important;
+}
+
+.monaco-workbench .activitybar {
+  background: #ff2e88 !important;
+}
+
+.monaco-workbench .activitybar .action-label,
+.monaco-workbench .activitybar .codicon {
+  color: #ffffff !important;
+}
+
+.monaco-workbench .part.statusbar {
+  background: #10c989 !important;
+  color: #06130f !important;
+}
+
+.monaco-workbench .titlebar {
+  background: #231747 !important;
+}
+
+.monaco-workbench .part.sidebar,
+.monaco-workbench .part.panel {
+  box-shadow: inset -1px 0 0 #674dce !important;
+}
+
+.monaco-workbench .activitybar .action-item.checked .active-item-indicator:before {
+  background: #42f5c5 !important;
+  box-shadow: 0 0 12px #42f5c5 !important;
+}
+
+.monaco-workbench .monaco-list-row.selected {
+  outline: 1px solid #42f5c5 !important;
+  outline-offset: -1px;
+}
+
+.monaco-workbench .editor-group-container {
+  border-top: 3px solid #ff2e88 !important;
+}

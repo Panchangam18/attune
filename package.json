@@ -1,18 +1,37 @@
 {
   "name": "attune",
   "version": "0.1.0",
-  "description": "Dynamic UI customization for Electron apps",
+  "description": "Agent skill and live CSS runtime for Electron desktop apps",
   "type": "module",
+  "files": [
+    "dist",
+    "README.md",
+    "SKILL.md",
+    "agents",
+    "examples"
+  ],
+  "keywords": [
+    "agent-skill",
+    "electron",
+    "css",
+    "desktop-automation",
+    "ui-customization"
+  ],
+  "engines": {
+    "node": ">=22"
+  },
   "bin": {
     "attune": "./dist/cli.js"
   },
   "scripts": {
     "build": "tsc",
-    "dev": "tsx src/cli.ts"
+    "dev": "tsx src/cli.ts",
+    "prepack": "npm run build",
+    "test": "npm run build && node --test test/*.test.mjs"
   },
   "devDependencies": {
-    "typescript": "^5.7.0",
+    "@types/node": "^22.0.0",
     "tsx": "^4.19.0",
-    "@types/node": "^22.0.0"
+    "typescript": "^5.7.0"
   }
 }

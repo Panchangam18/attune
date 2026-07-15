@@ -1,0 +1,78 @@
+/* A high-contrast Attune demo for Slack. */
+body,
+.p-client_container,
+.p-workspace,
+#client-ui {
+  --sk_primary_background: #071b1d !important;
+  --sk_primary_foreground: #e8fff7 !important;
+  --sk_highlight: #113d3d !important;
+  --sk_highlight_hover: #18504d !important;
+  --sk_sidebar_bg: #08272a !important;
+  --sk_sidebar_header: #051b1d !important;
+  --sk_sidebar_hover: #124447 !important;
+  --sk_sidebar_active: #12bfa8 !important;
+  --sk_sidebar_active_hover: #20d3bb !important;
+  --sk_button_primary: #0fc2a9 !important;
+  --sk_button_primary_hover: #37dac4 !important;
+  --sk_button_primary_text: #04201d !important;
+  --sk_focus_ring: #83f4df !important;
+  --sk_a11y_focus_ring: #83f4df !important;
+  background: #071b1d !important;
+  color: #e8fff7 !important;
+  font-family: "SF Mono", Menlo, Monaco, monospace !important;
+}
+
+.p-client_container,
+.p-workspace,
+.p-view_contents,
+#col_messages,
+.p-message_pane {
+  background: #071b1d !important;
+}
+
+.p-channel_sidebar,
+.p-sidebar,
+#col_channels {
+  background: #08272a !important;
+  border-right: 1px solid #1a6563 !important;
+}
+
+.p-channel_sidebar__channel--selected,
+.p-channel_sidebar__link--selected,
+.p-channel_sidebar__channel--selected:hover {
+  background: #12bfa8 !important;
+  color: #04201d !important;
+  box-shadow: inset 4px 0 0 #f7dd72 !important;
+}
+
+.p-channel_sidebar__channel--unread,
+.p-channel_sidebar__name--unread,
+.p-channel_sidebar__unread_count {
+  color: #f7dd72 !important;
+  font-weight: 700 !important;
+}
+
+.p-message_pane .c-message_kit__background,
+.p-message_pane .c-message_kit__hover {
+  border-radius: 0 !important;
+}
+
+.p-message_pane .c-message_kit__hover {
+  background: #0e3435 !important;
+  box-shadow: inset 3px 0 0 #30d9c0 !important;
+}
+
+.p-composer,
+.p-composer__body,
+.ql-editor,
+[data-qa="message_input"] {
+  background: #0b3031 !important;
+  color: #e8fff7 !important;
+  border-color: #2ba79d !important;
+  box-shadow: 0 0 0 1px #1a6563 !important;
+}
+
+button,
+.c-button {
+  border-radius: 2px !important;
+}

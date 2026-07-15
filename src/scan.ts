@@ -1,4 +1,4 @@
-import { execSync } from 'child_process';
+import { execFileSync } from 'child_process';
 import { existsSync, readdirSync } from 'fs';
 import { join } from 'path';
 import { homedir } from 'os';
@@ -6,9 +6,7 @@ import { homedir } from 'os';
 export interface DiscoveredApp {
   name: string;
   path: string;
-  resourcesPath: string;
   bundleId: string | null;
-  isPatched: boolean;
 }
 
 /**
@@ -35,15 +33,10 @@ export function scanForElectronApps(): DiscoveredApp[] {
 
       if (!existsSync(frameworkPath)) continue;
 
-      const resourcesPath = join(appPath, 'Contents/Resources');
-      const isPatched = existsSync(join(resourcesPath, '_original.asar'));
-
       apps.push({
         name: entry.replace('.app', ''),
         path: appPath,
-        resourcesPath,
         bundleId: getBundleId(appPath),
-        isPatched,
       });
     }
   }
@@ -67,10 +60,27 @@ export function getAppId(app: DiscoveredApp): string {
   return app.bundleId || app.name.toLowerCase().replace(/\s+/g, '-');
 }
 
+export function getAppExecutablePath(app: DiscoveredApp): string {
+  const plistPath = join(app.path, 'Contents/Info');
+  try {
+    const executable = execFileSync('defaults', ['read', plistPath, 'CFBundleExecutable'], {
+      encoding: 'utf-8',
+      timeout: 3000,
+    }).trim();
+    if (executable) {
+      return join(app.path, 'Contents', 'MacOS', executable);
+    }
+  } catch {
+    // Fall through to the conventional executable name.
+  }
+
+  return join(app.path, 'Contents', 'MacOS', app.name);
+}
+
 function getBundleId(appPath: string): string | null {
   try {
     const plistPath = join(appPath, 'Contents/Info');
-    return execSync(`defaults read "${plistPath}" CFBundleIdentifier`, {
+    return execFileSync('defaults', ['read', plistPath, 'CFBundleIdentifier'], {
       encoding: 'utf-8',
       timeout: 3000,
     }).trim();
