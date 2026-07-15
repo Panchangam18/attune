@@ -1,15 +1,15 @@
 ---
 name: attune
-description: Safely restyle installed Electron desktop apps with live CSS while preserving code signatures. Use when an agent needs to change the appearance of an installed Electron app such as Slack, Visual Studio Code, Discord, or another Chromium-based desktop interface; create or refine app-specific CSS; launch an app with a local DevTools session; or verify a desktop UI restyle with a screenshot.
+description: Safely restyle installed Chromium desktop apps with live CSS while preserving code signatures. Use when an agent needs to change the appearance of an Electron or compatible CEF app such as Slack, Visual Studio Code, Spotify, or Discord; create or refine app-specific CSS; launch an app with a local DevTools session; or verify a desktop UI restyle with a screenshot.
 ---
 
 # Attune
 
-Use Attune to apply CSS to Electron renderers without modifying the target app's bundle. Work from the Attune repository or an installed `attune` command.
+Use Attune to apply CSS to Chromium renderers without modifying the target app's bundle. Work from the Attune repository or an installed `attune` command.
 
 ## Operating Rules
 
-- Support Electron apps discovered by `attune scan` on macOS. Do not treat native macOS apps or browser tabs as Attune targets.
+- Support Electron and compatible Chromium Embedded Framework (CEF) apps discovered by `attune scan` on macOS. Do not treat native macOS apps or browser tabs as Attune targets.
 - Keep the target app bundle untouched. Never edit `app.asar`, alter an app's code signature, or use DevTools to run user-supplied JavaScript.
 - Ask for explicit consent before closing a running app. A normal quit may surface an unsaved-work prompt; never force-quit to make styling work.
 - Bind only to Attune's loopback workflow. Do not expose the DevTools port to the network.
@@ -43,7 +43,7 @@ Use Attune to apply CSS to Electron renderers without modifying the target app's
 - Prefer CSS variables and class or data selectors owned by the target app.
 - Use `!important` sparingly but deliberately for application theme tokens that override inline or high-specificity rules.
 - Give every style a clear name and keep it in a durable user-controlled location rather than a temporary file.
-- Inspect the UI after each significant change. Electron app DOM structures change across releases, so treat selectors as app-version-specific.
+- Inspect the UI after each significant change. Chromium app DOM structures change across releases, so treat selectors as app-version-specific.
 
 ## Verify and Undo
 
@@ -53,6 +53,6 @@ Use Attune to apply CSS to Electron renderers without modifying the target app's
 
 ## Boundaries
 
-- **Electron desktop apps:** supported through launch-time localhost DevTools.
+- **Electron and compatible CEF desktop apps:** supported through launch-time localhost DevTools.
 - **Safari and other websites:** require a browser extension workflow, not this runtime.
 - **Native apps such as Notes:** do not have an HTML/CSS renderer for Attune to target. Do not attempt bundle patching or native code injection.

@@ -13,6 +13,7 @@ test('agent skill has complete metadata and safety boundaries', () => {
   assert.match(skill, /Never edit `app\.asar`/);
   assert.match(skill, /Ask for explicit consent before closing a running app/);
   assert.match(skill, /attune status/);
+  assert.match(skill, /Chromium Embedded Framework \(CEF\)/);
   assert.match(skill, /Native apps such as Notes/);
 });
 
@@ -26,5 +27,5 @@ test('skill package includes agent metadata and examples', () => {
   assert.ok(packageJson.files.includes('examples'));
   assert.equal(packageJson.dependencies, undefined);
   assert.match(openaiMetadata, /display_name: "Attune"/);
-  assert.match(openaiMetadata, /Use \$attune to restyle/);
+  assert.match(openaiMetadata, /Use \$attune to restyle an installed Chromium desktop app/);
 });

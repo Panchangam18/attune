@@ -1,7 +1,7 @@
 {
   "name": "attune",
   "version": "0.1.0",
-  "description": "Agent skill and live CSS runtime for Electron desktop apps",
+  "description": "Agent skill and live CSS runtime for Chromium desktop apps",
   "type": "module",
   "files": [
     "dist",

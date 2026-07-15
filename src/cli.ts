@@ -3,7 +3,7 @@
 import { existsSync, readFileSync } from 'fs';
 import { resolve } from 'path';
 import { setStylesheetSource } from './config.js';
-import { scanForElectronApps, findApp, getAppId } from './scan.js';
+import { scanForSupportedApps, findApp, getAppId } from './scan.js';
 import { getSession, launch, runWatcher, stopSession } from './session.js';
 
 const [, , command, ...args] = process.argv;
@@ -35,16 +35,17 @@ async function main(command: string | undefined, args: string[]) {
 }
 
 function cmdScan() {
-  const apps = scanForElectronApps();
+  const apps = scanForSupportedApps();
   if (apps.length === 0) {
-    console.log('No Electron apps found.');
+    console.log('No supported Chromium desktop apps found.');
     return;
   }
 
-  console.log(`Found ${apps.length} Electron app(s):\n`);
+  console.log(`Found ${apps.length} supported Chromium app(s):\n`);
   for (const app of apps) {
     const id = getAppId(app);
     console.log(`  ${app.name}`);
+    console.log(`    Runtime: ${app.runtime === 'electron' ? 'Electron' : 'Chromium Embedded Framework'}`);
     console.log(`    ID: ${id}`);
     console.log(`    Path: ${app.path}`);
     console.log('');
@@ -57,11 +58,11 @@ function cmdSetCSS(query: string | undefined, cssFilePath: string | undefined) {
     process.exit(1);
   }
 
-  const apps = scanForElectronApps();
+  const apps = scanForSupportedApps();
   const app = findApp(apps, query);
 
   if (!app) {
-    console.error(`No Electron app found matching "${query}".`);
+    console.error(`No supported Chromium app found matching "${query}".`);
     process.exit(1);
   }
 
@@ -88,9 +89,9 @@ async function cmdLaunch(query: string | undefined) {
     process.exit(1);
   }
 
-  const app = findApp(scanForElectronApps(), query);
+  const app = findApp(scanForSupportedApps(), query);
   if (!app) {
-    console.error(`No Electron app found matching "${query}".`);
+    console.error(`No supported Chromium app found matching "${query}".`);
     process.exit(1);
   }
 
@@ -110,9 +111,9 @@ function cmdStop(query: string | undefined) {
     process.exit(1);
   }
 
-  const app = findApp(scanForElectronApps(), query);
+  const app = findApp(scanForSupportedApps(), query);
   if (!app) {
-    console.error(`No Electron app found matching "${query}".`);
+    console.error(`No supported Chromium app found matching "${query}".`);
     process.exit(1);
   }
 
@@ -126,9 +127,9 @@ function cmdStatus(query: string | undefined) {
     process.exit(1);
   }
 
-  const app = findApp(scanForElectronApps(), query);
+  const app = findApp(scanForSupportedApps(), query);
   if (!app) {
-    console.error(`No Electron app found matching "${query}".`);
+    console.error(`No supported Chromium app found matching "${query}".`);
     process.exit(1);
   }
 
@@ -153,10 +154,10 @@ async function cmdWatch(configPath: string | undefined, rawPort: string | undefi
 
 function printUsage() {
   console.log(`
-attune — Dynamic UI customization for Electron apps
+attune — Dynamic UI customization for Chromium desktop apps
 
 Usage:
-  attune scan                        Scan for Electron apps on the system
+  attune scan                        Scan supported Chromium desktop apps
   attune set-css <app-name> <file>   Set custom CSS for an app
   attune launch <app-name>           Launch without modifying the app bundle
   attune status <app-name>           Show an Attune session

@@ -3,18 +3,20 @@ import { existsSync, readdirSync } from 'fs';
 import { join } from 'path';
 import { homedir } from 'os';
 
+export type ChromiumRuntime = 'electron' | 'cef';
+
 export interface DiscoveredApp {
   name: string;
   path: string;
   bundleId: string | null;
+  runtime: ChromiumRuntime;
 }
 
 /**
- * Scan the system for installed Electron apps.
- * Checks /Applications and ~/Applications for .app bundles
- * that contain the Electron Framework.
+ * Scan the system for Chromium desktop apps that can expose the DevTools protocol.
+ * Electron and CEF apps use the same local CSS injection session once launched.
  */
-export function scanForElectronApps(): DiscoveredApp[] {
+export function scanForSupportedApps(): DiscoveredApp[] {
   const searchDirs = [
     '/Applications',
     join(homedir(), 'Applications'),
@@ -29,19 +31,30 @@ export function scanForElectronApps(): DiscoveredApp[] {
 
     for (const entry of entries) {
       const appPath = join(dir, entry);
-      const frameworkPath = join(appPath, 'Contents/Frameworks/Electron Framework.framework');
-
-      if (!existsSync(frameworkPath)) continue;
+      const runtime = getChromiumRuntime(appPath);
+      if (!runtime) continue;
 
       apps.push({
         name: entry.replace('.app', ''),
         path: appPath,
         bundleId: getBundleId(appPath),
+        runtime,
       });
     }
   }
 
   return apps;
+}
+
+export function getChromiumRuntime(appPath: string): ChromiumRuntime | null {
+  const frameworksPath = join(appPath, 'Contents/Frameworks');
+  if (existsSync(join(frameworksPath, 'Electron Framework.framework'))) {
+    return 'electron';
+  }
+  if (existsSync(join(frameworksPath, 'Chromium Embedded Framework.framework'))) {
+    return 'cef';
+  }
+  return null;
 }
 
 /**

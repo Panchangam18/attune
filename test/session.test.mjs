@@ -1,10 +1,11 @@
 import assert from 'node:assert/strict';
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
 import vm from 'node:vm';
 import { readStylesheet } from '../dist/config.js';
+import { getChromiumRuntime } from '../dist/scan.js';
 import { buildStyleInjectionExpression } from '../dist/session.js';
 
 test('style injection expression serializes and manages stylesheet text safely', () => {
@@ -53,4 +54,19 @@ test('stylesheet reads live source edits and falls back to the saved CSS', async
 
   await rm(sourcePath);
   assert.equal(readStylesheet(configPath), 'body { color: black; }');
+});
+
+test('scanner recognizes Electron and Chromium Embedded Framework app bundles', async (t) => {
+  const root = await mkdtemp(join(tmpdir(), 'attune-runtime-'));
+  const electronPath = join(root, 'Electron.app');
+  const cefPath = join(root, 'Spotify.app');
+
+  t.after(() => rm(root, { recursive: true, force: true }));
+
+  await mkdir(join(electronPath, 'Contents', 'Frameworks', 'Electron Framework.framework'), { recursive: true });
+  await mkdir(join(cefPath, 'Contents', 'Frameworks', 'Chromium Embedded Framework.framework'), { recursive: true });
+
+  assert.equal(getChromiumRuntime(electronPath), 'electron');
+  assert.equal(getChromiumRuntime(cefPath), 'cef');
+  assert.equal(getChromiumRuntime(join(root, 'Notes.app')), null);
 });

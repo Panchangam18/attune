@@ -1,4 +1,4 @@
 interface:
   display_name: "Attune"
-  short_description: "Style Electron desktop apps safely"
-  default_prompt: "Use $attune to restyle an installed Electron app with live CSS."
+  short_description: "Style Chromium desktop apps safely"
+  default_prompt: "Use $attune to restyle an installed Chromium desktop app with live CSS."
