@@ -1,0 +1,38 @@
+{
+  "name": "Arrakis",
+  "description": "A desert-first personal desktop design system inspired by Dune.",
+  "tokens": "themes/arrakis/tokens.css",
+  "baseLayout": "themes/arrakis/base-layout.css",
+  "adapters": {
+    "Spotify": {
+      "source": "themes/arrakis/adapters/spotify.css",
+      "output": "examples/spotify-arrakis.css",
+      "canvas": "dark",
+      "runtime": "attune-compatible desktop renderer"
+    },
+    "Slack": {
+      "source": "themes/arrakis/adapters/slack.css",
+      "output": "examples/slack-arrakis.css",
+      "canvas": "dark",
+      "runtime": "attune-compatible desktop renderer"
+    },
+    "Visual Studio Code": {
+      "source": "themes/arrakis/adapters/vscode.css",
+      "output": "examples/vscode-arrakis.css",
+      "canvas": "dark",
+      "runtime": "attune-compatible desktop renderer"
+    },
+    "Claude": {
+      "source": "themes/arrakis/adapters/claude.css",
+      "output": "examples/claude-arrakis.css",
+      "canvas": "light",
+      "runtime": "browser extension or compatible renderer"
+    },
+    "ChatGPT": {
+      "source": "themes/arrakis/adapters/chatgpt.css",
+      "output": "examples/chatgpt-arrakis.css",
+      "canvas": "light",
+      "runtime": "attune-compatible desktop renderer"
+    }
+  }
+}

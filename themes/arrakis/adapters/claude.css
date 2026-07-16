@@ -1,0 +1,81 @@
+/* Claude: sand canvas for a light conversational surface. */
+:root,
+html,
+body {
+  color-scheme: light;
+  --bg-000: var(--arr-sand) !important;
+  --bg-100: var(--arr-sand-light) !important;
+  --bg-200: var(--arr-sand-light) !important;
+  --bg-300: var(--arr-sand-deep-1) !important;
+  --bg-400: var(--arr-sand-deep-2) !important;
+  --bg-500: var(--arr-blue-slate) !important;
+  --text-000: var(--arr-text-on-light) !important;
+  --text-100: var(--arr-text-on-light) !important;
+  --text-200: var(--arr-text-muted-on-light) !important;
+  --text-300: var(--arr-text-muted-on-light) !important;
+  --text-400: var(--arr-blue-slate) !important;
+  --text-500: var(--arr-shadow) !important;
+  --accent-main-000: var(--arr-terracotta) !important;
+  --accent-main-100: var(--arr-terracotta-hot) !important;
+  --accent-main-200: var(--arr-sand-deep-2) !important;
+  --accent-main-900: var(--arr-shadow) !important;
+  --accent-secondary-000: var(--arr-blue-slate) !important;
+  --accent-secondary-100: var(--arr-shadow-soft) !important;
+  --accent-pro-000: var(--arr-blue-slate) !important;
+  --accent-pro-100: var(--arr-shadow-soft) !important;
+  --border-100: var(--arr-sand-light) !important;
+  --border-200: var(--arr-rule-light) !important;
+  --border-300: var(--arr-sand-deep-2) !important;
+  --border-400: var(--arr-blue-slate) !important;
+  --oncolor-100: var(--arr-text-on-dark) !important;
+}
+
+html,
+body,
+#root,
+.flex.min-h-screen,
+main {
+  background-color: var(--arr-sand) !important;
+  color: var(--arr-text-on-light) !important;
+}
+
+h1,
+h2,
+h3 {
+  color: var(--arr-shadow) !important;
+  font-family: var(--arr-font-display) !important;
+  letter-spacing: 0 !important;
+}
+
+aside,
+nav {
+  background: var(--arr-blue-slate) !important;
+  border-color: var(--arr-shadow) !important;
+  color: var(--arr-text-on-dark) !important;
+}
+
+textarea,
+[contenteditable="true"] {
+  background: var(--arr-sand-light) !important;
+  border-color: var(--arr-rule-light) !important;
+  color: var(--arr-text-on-light) !important;
+}
+
+button[data-testid="send-button"],
+.bg-accent-main-000,
+.bg-accent-main-100,
+[class*="bg-purple"] {
+  background-color: var(--arr-terracotta) !important;
+  color: var(--arr-text-on-dark) !important;
+}
+
+[class*="text-purple"] {
+  color: var(--arr-terracotta) !important;
+}
+
+pre,
+code {
+  background: var(--arr-shadow) !important;
+  color: var(--arr-text-on-dark) !important;
+  font-family: var(--arr-font-meta) !important;
+}

@@ -1,0 +1,198 @@
+/* Slack: shadow workspace, restrained slate navigation, terracotta action states. */
+:root,
+body,
+.p-client_container,
+.p-workspace,
+#client-ui {
+  color-scheme: dark;
+  --sk_primary_background: var(--arr-shadow) !important;
+  --sk_primary_foreground: var(--arr-text-on-dark) !important;
+  --sk_highlight: var(--arr-shadow-raised) !important;
+  --sk_highlight_hover: var(--arr-shadow-soft) !important;
+  --sk_sidebar_bg: var(--arr-shadow-raised) !important;
+  --sk_sidebar_header: var(--arr-shadow) !important;
+  --sk_sidebar_hover: var(--arr-shadow-soft) !important;
+  --sk_sidebar_active: var(--arr-shadow-soft) !important;
+  --sk_sidebar_active_hover: var(--arr-shadow-soft) !important;
+  --sk_button_primary: var(--arr-terracotta) !important;
+  --sk_button_primary_hover: var(--arr-terracotta-hot) !important;
+  --sk_button_primary_text: var(--arr-text-on-dark) !important;
+  --sk_focus_ring: var(--arr-blue-slate) !important;
+  --sk_a11y_focus_ring: var(--arr-sand) !important;
+  --sk_highlight_accent: var(--arr-terracotta) !important;
+  --sk_channel_hover: var(--arr-shadow-soft) !important;
+  background: var(--arr-shadow) !important;
+  color: var(--arr-text-on-dark) !important;
+}
+
+.p-client_container,
+.p-workspace,
+.p-view_contents,
+#col_messages,
+.p-message_pane,
+.p-message_pane__top_bar,
+.p-ia4_client_header {
+  background: var(--arr-shadow) !important;
+  color: var(--arr-text-on-dark) !important;
+}
+
+/* Tahoe's outer rail and top navigation do not inherit the older sidebar tokens. */
+.p-theme_background,
+.p-tab_rail,
+[data-qa="tab_rail_desktop"],
+.p-ia4_top_nav,
+.p-ia4_top_nav__container_wrapper,
+.p-ia4_top_nav__middle_container,
+.p-ia4_top_nav__right_container {
+  background: var(--arr-shadow-raised) !important;
+  color: var(--arr-text-on-dark) !important;
+}
+
+.p-top_nav__search__container,
+.p-top_nav__search,
+.p-tab_rail__button__icon,
+.p-control_strip__circle_button,
+.p-team_sidebar__icon_button,
+.p-home_header_controls__composer_button {
+  background: var(--arr-shadow-soft) !important;
+  border-color: var(--arr-rule-dark) !important;
+  color: var(--arr-text-muted-on-dark) !important;
+}
+
+.p-view_header,
+.p-view_header__actions,
+.channel_tab_bar__HY3uU,
+.p-ia4_history_buttons__button,
+.p-view_header_search_action_button,
+.p-view_header_star_action_button {
+  background: var(--arr-shadow) !important;
+  border-color: var(--arr-rule-dark) !important;
+  color: var(--arr-text-on-dark) !important;
+}
+
+.p-client_container h1,
+.p-client_container h2,
+.p-client_container h3,
+.p-channel_header__channel_name,
+[data-qa="channel_name"] {
+  font-family: var(--arr-font-display) !important;
+  letter-spacing: 0 !important;
+}
+
+.p-channel_sidebar,
+.p-sidebar,
+#col_channels,
+.p-ia4_sidebar_header,
+.p-ia4_sidebar {
+  background: var(--arr-shadow-raised) !important;
+  border-right: 1px solid var(--arr-rule-dark) !important;
+  color: var(--arr-text-on-dark) !important;
+}
+
+.p-channel_sidebar a,
+.p-sidebar a,
+#col_channels a {
+  color: var(--arr-text-on-dark) !important;
+}
+
+.p-channel_sidebar__channel--selected,
+.p-channel_sidebar__link--selected,
+.p-channel_sidebar__channel--selected:hover,
+[data-qa="channel_sidebar_name"] [aria-current="page"] {
+  background: var(--arr-shadow-soft) !important;
+  box-shadow: inset 4px 0 0 var(--arr-terracotta) !important;
+  color: var(--arr-text-on-dark) !important;
+}
+
+.p-channel_sidebar__channel--selected *,
+.p-channel_sidebar__link--selected *,
+[data-qa="channel_sidebar_name"] [aria-current="page"] * {
+  color: var(--arr-text-on-dark) !important;
+}
+
+.p-message_pane .c-message_kit__hover,
+.p-message_pane [data-qa="message_container"]:hover {
+  background: var(--arr-shadow-raised) !important;
+  box-shadow: inset 3px 0 0 var(--arr-terracotta) !important;
+}
+
+.p-message_pane .c-timestamp,
+.p-message_pane [data-qa="message_time"] {
+  color: var(--arr-text-muted-on-dark) !important;
+  font-family: var(--arr-font-meta) !important;
+  letter-spacing: 0 !important;
+}
+
+.p-composer,
+.p-composer__body,
+.p-message_input,
+.p-message_input__input_container,
+.c-wysiwyg_container,
+.c-wysiwyg_container--theme_dark,
+.ql-editor,
+[data-qa="message_input"] {
+  background: var(--arr-shadow-raised) !important;
+  border-color: var(--arr-rule-dark) !important;
+  box-shadow: 0 0 0 1px var(--arr-rule-dark) !important;
+  color: var(--arr-text-on-dark) !important;
+}
+
+.c-wysiwyg_container__footer,
+.c-wysiwyg_container__footer_divider,
+.p-message_input__footer,
+.p-message_input__input_container_unstyled {
+  background: var(--arr-shadow-raised) !important;
+  border-color: var(--arr-rule-dark) !important;
+  color: var(--arr-text-muted-on-dark) !important;
+}
+
+.p-client_container .c-icon_button,
+.p-client_container .c-icon,
+.p-client_container .c-icon_button svg,
+.p-client_container .c-icon_button svg path,
+.p-client_container [data-qa="top-nav"] button,
+.p-client_container [data-qa="view_header"] button {
+  color: var(--arr-text-muted-on-dark) !important;
+}
+
+.p-client_container .c-icon_button svg path {
+  fill: currentColor !important;
+  stroke: currentColor !important;
+}
+
+.p-client_container .c-presence--active,
+.p-client_container [data-qa="presence_indicator"] {
+  color: var(--arr-blue-slate) !important;
+}
+
+.p-client_container .c-timestamp__label,
+.p-client_container .ql-placeholder,
+.p-client_container .c-texty_input__placeholder,
+.p-client_container .p-channel_sidebar__link {
+  color: var(--arr-text-muted-on-dark) !important;
+}
+
+.p-client_container [role="dialog"],
+.p-client_container [role="menu"],
+.p-client_container .c-menu,
+.p-client_container .c-popover,
+.p-client_container .p-popover,
+.p-client_container .p-flexpane__preview-mode-overlay,
+.p-client_container .p-trouble_loading_container,
+.p-client_container .p-trouble_loading {
+  background: var(--arr-shadow-raised) !important;
+  border-color: var(--arr-rule-dark) !important;
+  color: var(--arr-text-on-dark) !important;
+}
+
+.p-client_container .p-team_sidebar__shortcut_hint,
+.p-client_container .p-tab_rail__shortcut_hint {
+  background: var(--arr-sand-deep-1) !important;
+  color: var(--arr-shadow) !important;
+}
+
+button[data-qa="texty_send_button"],
+.p-composer__button--send {
+  background: var(--arr-terracotta) !important;
+  color: var(--arr-text-on-dark) !important;
+}

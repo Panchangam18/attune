@@ -1,0 +1,236 @@
+/* Generated from themes/arrakis. Run npm run build:arrakis to refresh. */
+
+/* Arrakis core tokens: wallpaper-derived sand, shadow, slate, and terracotta. */
+:root {
+  --arr-sand: #b7a77d;
+  --arr-sand-deep-1: #988a66;
+  --arr-sand-deep-2: #70664d;
+  --arr-sand-light: #d5cdb0;
+  --arr-shadow: #15140f;
+  --arr-shadow-raised: #211f17;
+  --arr-shadow-soft: #2c291f;
+  --arr-blue-slate: #5e747f;
+  --arr-prussian-blue: #161b33;
+  --arr-terracotta: #aa5042;
+  --arr-terracotta-hot: #c56b5d;
+  --arr-text-on-light: var(--arr-shadow);
+  --arr-text-muted-on-light: #514b39;
+  --arr-text-on-dark: #e5dfc9;
+  --arr-text-muted-on-dark: #b9b092;
+  --arr-rule-light: #988a66;
+  --arr-rule-dark: #454032;
+  --arr-sun: var(--arr-sand-light);
+  --arr-dune: var(--arr-sand-deep-1);
+  --arr-ridge: var(--arr-sand-deep-2);
+  --arr-shade: var(--arr-shadow-raised);
+  --arr-ink: var(--arr-shadow);
+  --arr-night: var(--arr-shadow);
+  --arr-spice: var(--arr-terracotta);
+  --arr-spice-hot: var(--arr-terracotta-hot);
+  --arr-water: var(--arr-blue-slate);
+  --arr-text: var(--arr-text-on-light);
+  --arr-text-muted: var(--arr-text-muted-on-light);
+  --arr-rule: var(--arr-rule-light);
+  --arr-font-ui: "Nasalization";
+  --arr-font-display: var(--arr-font-ui);
+  --arr-font-meta: var(--arr-font-ui);
+}
+
+/* Shared base: app adapters choose light or dark canvas mode explicitly. */
+
+html,
+body,
+body *:not(.codicon):not([class^="codicon"]):not([class*=" codicon"]) {
+  font-family: var(--arr-font-ui) !important;
+}
+
+::selection {
+  background: var(--arr-terracotta) !important;
+  color: var(--arr-text-on-dark) !important;
+}
+
+button,
+[role="button"],
+input,
+textarea,
+select {
+  border-radius: 2px !important;
+}
+
+:focus-visible {
+  outline: 2px solid var(--arr-blue-slate) !important;
+  outline-offset: 2px !important;
+}
+
+/* Spotify: preserve its dark listening context with a sand-shadow base. */
+:root {
+  color-scheme: dark;
+  --background-base: var(--arr-shadow) !important;
+  --background-highlight: var(--arr-shadow-raised) !important;
+  --background-press: var(--arr-shadow-soft) !important;
+  --background-elevated-base: var(--arr-shadow-raised) !important;
+  --background-elevated-highlight: var(--arr-shadow-soft) !important;
+  --background-elevated-press: var(--arr-blue-slate) !important;
+  --background-tinted-base: var(--arr-shadow-soft) !important;
+  --background-tinted-highlight: var(--arr-blue-slate) !important;
+  --background-tinted-press: var(--arr-blue-slate) !important;
+  --text-base: var(--arr-text-on-dark) !important;
+  --text-subdued: var(--arr-text-muted-on-dark) !important;
+  --text-bright-accent: var(--arr-terracotta) !important;
+  --text-positive: var(--arr-terracotta) !important;
+  --essential-base: var(--arr-terracotta) !important;
+  --essential-subdued: var(--arr-blue-slate) !important;
+  --essential-bright-accent: var(--arr-terracotta) !important;
+  --essential-positive: var(--arr-terracotta) !important;
+  --decorative-base: var(--arr-blue-slate) !important;
+  --decorative-subdued: var(--arr-shadow-soft) !important;
+  --decorative-bright-accent: var(--arr-terracotta) !important;
+  --decorative-positive: var(--arr-terracotta) !important;
+  --decorative-warning: var(--arr-sand) !important;
+  --decorative-negative: var(--arr-terracotta) !important;
+  --spice-button: var(--arr-terracotta) !important;
+  --spice-button-active: var(--arr-terracotta-hot) !important;
+  --spice-tab-active: var(--arr-blue-slate) !important;
+}
+
+html,
+body,
+#main,
+[data-testid="root"],
+#main-view,
+[data-testid="main-view-container"] {
+  background: var(--arr-shadow) !important;
+  color: var(--arr-text-on-dark) !important;
+}
+
+[data-testid="global-nav-bar"],
+[data-testid="left-sidebar"],
+nav[aria-label="Main"],
+[data-testid="now-playing-bar"] {
+  background: var(--arr-shadow-raised) !important;
+  border-color: var(--arr-rule-dark) !important;
+}
+
+[data-testid="left-sidebar"] a,
+[data-testid="left-sidebar"] [data-encore-id="text"],
+nav[aria-label="Main"] [data-encore-id="text"] {
+  color: var(--arr-text-on-dark) !important;
+}
+
+main h1,
+main h2,
+main h3,
+[data-testid="playlist-page-title"],
+[data-testid="context-item-info-title"] {
+  color: var(--arr-text-on-dark) !important;
+  font-family: var(--arr-font-display) !important;
+  letter-spacing: 0 !important;
+}
+
+[data-testid="track-list-row"],
+[data-testid="playlist-card"],
+[data-testid="album-card"],
+[data-testid="artist-card"] {
+  background: var(--arr-shadow-raised) !important;
+  border-color: var(--arr-rule-dark) !important;
+  color: var(--arr-text-on-dark) !important;
+}
+
+[data-testid="track-list-row"]:hover,
+[data-testid="playlist-card"]:hover,
+[data-testid="album-card"]:hover,
+[data-testid="artist-card"]:hover {
+  background: var(--arr-shadow-soft) !important;
+  box-shadow: inset 3px 0 0 var(--arr-terracotta) !important;
+}
+
+[data-testid="track-list-row"] [data-testid="internal-track-link"],
+[data-testid="now-playing-bar"] [data-testid="context-item-info-subtitles"] {
+  font-family: var(--arr-font-meta) !important;
+  letter-spacing: 0 !important;
+}
+
+[data-testid="now-playing-bar"] {
+  background: var(--arr-shadow) !important;
+  border-top: 2px solid var(--arr-terracotta) !important;
+  color: var(--arr-text-on-dark) !important;
+}
+
+[data-testid="now-playing-bar"] [data-encore-id="text"],
+[data-testid="now-playing-bar"] a {
+  color: var(--arr-text-on-dark) !important;
+}
+
+/* Card and library controls appear only when their item is being explored. */
+[data-testid="play-button"] {
+  background: transparent !important;
+  border-color: transparent !important;
+  border-radius: 50% !important;
+  opacity: 0 !important;
+  color: var(--arr-shadow) !important;
+}
+
+[data-testid="play-button"] .e-10451-button-primary__inner {
+  background: transparent !important;
+}
+
+[data-testid="play-button"]:hover,
+[data-testid="play-button"]:focus-visible,
+[data-testid="track-list-row"]:hover [data-testid="play-button"],
+[data-testid="playlist-card"]:hover [data-testid="play-button"],
+[data-testid="album-card"]:hover [data-testid="play-button"],
+[data-testid="artist-card"]:hover [data-testid="play-button"],
+.e-10451-box--interactive:hover [data-testid="play-button"],
+.e-10451-card:hover [data-testid="play-button"],
+.e-10451-legacy-list-row__header-side:hover [data-testid="play-button"] {
+  background: var(--arr-terracotta) !important;
+  border-color: var(--arr-terracotta) !important;
+  opacity: 1 !important;
+}
+
+[data-testid="play-button"]:hover .e-10451-button-primary__inner,
+[data-testid="play-button"]:focus-visible .e-10451-button-primary__inner,
+[data-testid="track-list-row"]:hover [data-testid="play-button"] .e-10451-button-primary__inner,
+[data-testid="playlist-card"]:hover [data-testid="play-button"] .e-10451-button-primary__inner,
+[data-testid="album-card"]:hover [data-testid="play-button"] .e-10451-button-primary__inner,
+[data-testid="artist-card"]:hover [data-testid="play-button"] .e-10451-button-primary__inner,
+.e-10451-box--interactive:hover [data-testid="play-button"] .e-10451-button-primary__inner,
+.e-10451-card:hover [data-testid="play-button"] .e-10451-button-primary__inner,
+.e-10451-legacy-list-row__header-side:hover [data-testid="play-button"] .e-10451-button-primary__inner {
+  background: var(--arr-terracotta) !important;
+}
+
+[data-testid="control-button-playpause"] {
+  background: var(--arr-terracotta) !important;
+  border-color: var(--arr-terracotta) !important;
+  border-radius: 50% !important;
+  color: var(--arr-shadow) !important;
+}
+
+[data-testid="control-button-playpause"] .e-10451-button-primary__inner {
+  background: var(--arr-terracotta) !important;
+}
+
+[data-testid="control-button-playpause"]:hover {
+  background: var(--arr-terracotta-hot) !important;
+  border-color: var(--arr-terracotta-hot) !important;
+}
+
+[data-testid="control-button-playpause"]:hover .e-10451-button-primary__inner {
+  background: var(--arr-terracotta-hot) !important;
+}
+
+[data-testid="playback-progressbar"] [role="slider"],
+[data-testid="volume-bar"] [role="slider"] {
+  --progress-bar-bg: var(--arr-terracotta) !important;
+  --progress-bar-fg: var(--arr-terracotta) !important;
+}
+
+[style*="#af2896" i],
+[style*="#a855f7" i] {
+  background-color: var(--arr-terracotta) !important;
+  border-color: var(--arr-terracotta) !important;
+  color: var(--arr-terracotta) !important;
+  fill: var(--arr-terracotta) !important;
+  stroke: var(--arr-terracotta) !important;
+}

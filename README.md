@@ -42,6 +42,29 @@ and code signature remain unchanged.
 - [Spotify Vinyl Archive](examples/spotify-vinyl-archive.css)
 - [VS Code neon](examples/vscode-neon.css)
 
+## Design Systems
+
+### Arrakis
+
+[Arrakis](themes/arrakis/README.md) is a desert-first, Dune-inspired design
+system for a personal desktop. Its shared sand, dune, ink, spice, and water
+tokens generate standalone base layouts for Spotify, Slack, VS Code, Claude,
+and ChatGPT.
+
+Arrakis uses Nasalization Regular for all readable UI text. Install it locally
+from [Typodermic](https://typodermicfonts.com/nasalization/) before applying a
+theme; Attune intentionally does not distribute the font file.
+
+```sh
+npm run build:arrakis
+node dist/cli.js set-css "Spotify" ./examples/spotify-arrakis.css
+```
+
+Spotify, Slack, VS Code, and ChatGPT are intended for Attune-compatible desktop
+renderers. The Claude adapter is a reusable CSS surface for a browser extension
+or another compatible renderer; Attune does not currently launch Claude
+directly.
+
 ## Scope And Safety
 
 Attune supports scanned Electron and compatible Chromium Embedded Framework (CEF)

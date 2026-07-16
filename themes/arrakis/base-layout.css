@@ -1,0 +1,25 @@
+/* Shared base: app adapters choose light or dark canvas mode explicitly. */
+
+html,
+body,
+body *:not(.codicon):not([class^="codicon"]):not([class*=" codicon"]) {
+  font-family: var(--arr-font-ui) !important;
+}
+
+::selection {
+  background: var(--arr-terracotta) !important;
+  color: var(--arr-text-on-dark) !important;
+}
+
+button,
+[role="button"],
+input,
+textarea,
+select {
+  border-radius: 2px !important;
+}
+
+:focus-visible {
+  outline: 2px solid var(--arr-blue-slate) !important;
+  outline-offset: 2px !important;
+}

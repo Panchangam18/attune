@@ -1,0 +1,35 @@
+/* Arrakis core tokens: wallpaper-derived sand, shadow, slate, and terracotta. */
+:root {
+  --arr-sand: #b7a77d;
+  --arr-sand-deep-1: #988a66;
+  --arr-sand-deep-2: #70664d;
+  --arr-sand-light: #d5cdb0;
+  --arr-shadow: #15140f;
+  --arr-shadow-raised: #211f17;
+  --arr-shadow-soft: #2c291f;
+  --arr-blue-slate: #5e747f;
+  --arr-prussian-blue: #161b33;
+  --arr-terracotta: #aa5042;
+  --arr-terracotta-hot: #c56b5d;
+  --arr-text-on-light: var(--arr-shadow);
+  --arr-text-muted-on-light: #514b39;
+  --arr-text-on-dark: #e5dfc9;
+  --arr-text-muted-on-dark: #b9b092;
+  --arr-rule-light: #988a66;
+  --arr-rule-dark: #454032;
+  --arr-sun: var(--arr-sand-light);
+  --arr-dune: var(--arr-sand-deep-1);
+  --arr-ridge: var(--arr-sand-deep-2);
+  --arr-shade: var(--arr-shadow-raised);
+  --arr-ink: var(--arr-shadow);
+  --arr-night: var(--arr-shadow);
+  --arr-spice: var(--arr-terracotta);
+  --arr-spice-hot: var(--arr-terracotta-hot);
+  --arr-water: var(--arr-blue-slate);
+  --arr-text: var(--arr-text-on-light);
+  --arr-text-muted: var(--arr-text-muted-on-light);
+  --arr-rule: var(--arr-rule-light);
+  --arr-font-ui: "Nasalization";
+  --arr-font-display: var(--arr-font-ui);
+  --arr-font-meta: var(--arr-font-ui);
+}

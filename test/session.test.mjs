@@ -60,13 +60,16 @@ test('scanner recognizes Electron and Chromium Embedded Framework app bundles', 
   const root = await mkdtemp(join(tmpdir(), 'attune-runtime-'));
   const electronPath = join(root, 'Electron.app');
   const cefPath = join(root, 'Spotify.app');
+  const codexPath = join(root, 'ChatGPT.app');
 
   t.after(() => rm(root, { recursive: true, force: true }));
 
   await mkdir(join(electronPath, 'Contents', 'Frameworks', 'Electron Framework.framework'), { recursive: true });
   await mkdir(join(cefPath, 'Contents', 'Frameworks', 'Chromium Embedded Framework.framework'), { recursive: true });
+  await mkdir(join(codexPath, 'Contents', 'Frameworks', 'Codex Framework.framework'), { recursive: true });
 
   assert.equal(getChromiumRuntime(electronPath), 'electron');
   assert.equal(getChromiumRuntime(cefPath), 'cef');
+  assert.equal(getChromiumRuntime(codexPath), 'cef');
   assert.equal(getChromiumRuntime(join(root, 'Notes.app')), null);
 });

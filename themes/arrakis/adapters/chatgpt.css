@@ -1,0 +1,145 @@
+/* ChatGPT/Codex: continuous Arrakis shell for browser or compatible renderer injection. */
+:root {
+  color-scheme: light;
+  --main-surface-background: var(--arr-sand-light) !important;
+  --main-surface-secondary: var(--arr-sand) !important;
+  --sidebar-surface-primary: var(--arr-shadow-raised) !important;
+  --sidebar-surface-secondary: var(--arr-shadow) !important;
+  --text-primary: var(--arr-text-on-light) !important;
+  --text-secondary: var(--arr-text-muted-on-light) !important;
+  --border-light: var(--arr-rule-light) !important;
+  --accent-blue: var(--arr-terracotta) !important;
+  --color-token-main-surface-primary: var(--arr-sand-light) !important;
+  --color-token-side-bar-background: var(--arr-shadow-raised) !important;
+  --color-token-bg-primary: var(--arr-sand-light) !important;
+  --color-token-bg-secondary: color-mix(in srgb, var(--arr-sand) 88%, transparent) !important;
+  --color-token-bg-tertiary: color-mix(in srgb, var(--arr-sand) 78%, transparent) !important;
+  --color-token-bg-fog: color-mix(in srgb, var(--arr-shadow) 8%, transparent) !important;
+  --color-token-foreground: var(--arr-text-on-light) !important;
+  --color-token-text-primary: var(--arr-text-on-light) !important;
+  --color-token-text-secondary: var(--arr-text-muted-on-light) !important;
+  --color-token-text-tertiary: var(--arr-sand-deep-2) !important;
+  --color-token-description-foreground: var(--arr-sand-deep-2) !important;
+  --color-token-icon-foreground: var(--arr-sand-deep-2) !important;
+  --color-token-input-background: color-mix(in srgb, var(--arr-sand-light) 88%, var(--arr-sand)) !important;
+  --color-token-input-border: var(--arr-rule-light) !important;
+  --color-token-border: color-mix(in srgb, var(--arr-rule-light) 62%, transparent) !important;
+  --color-token-border-heavy: var(--arr-rule-light) !important;
+  --color-token-list-hover-background: color-mix(in srgb, var(--arr-shadow) 9%, transparent) !important;
+  --color-token-list-active-selection-background: color-mix(in srgb, var(--arr-terracotta) 18%, transparent) !important;
+  --color-token-button-background: var(--arr-terracotta) !important;
+  --color-token-button-foreground: var(--arr-text-on-dark) !important;
+  --color-token-primary: var(--arr-terracotta) !important;
+  --color-token-link: var(--arr-blue-slate) !important;
+}
+
+html,
+body,
+#__next,
+#root,
+main {
+  background: var(--arr-sand-light) !important;
+  color: var(--arr-text-on-light) !important;
+}
+
+h1,
+h2,
+h3 {
+  color: var(--arr-shadow) !important;
+  font-family: var(--arr-font-display) !important;
+  letter-spacing: 0 !important;
+}
+
+.app-shell-left-panel,
+.app-shell-left-panel nav {
+  --color-token-foreground: var(--arr-text-on-dark) !important;
+  --color-token-text-primary: var(--arr-text-on-dark) !important;
+  --color-token-text-secondary: var(--arr-text-muted-on-dark) !important;
+  --color-token-text-tertiary: var(--arr-sand-deep-1) !important;
+  --color-token-description-foreground: var(--arr-text-muted-on-dark) !important;
+  --color-token-icon-foreground: var(--arr-text-muted-on-dark) !important;
+  --color-token-list-hover-background: var(--arr-shadow-soft) !important;
+  --color-token-list-active-selection-background: color-mix(in srgb, var(--arr-terracotta) 34%, transparent) !important;
+  background: var(--arr-shadow-raised) !important;
+  border-color: var(--arr-rule-dark) !important;
+  color: var(--arr-text-on-dark) !important;
+}
+
+.app-shell-left-panel,
+.app-shell-left-panel a,
+.app-shell-left-panel button,
+.app-shell-left-panel [role="button"],
+.app-shell-left-panel [class*="text-token"] {
+  color: var(--arr-text-on-dark) !important;
+}
+
+.app-shell-left-panel [class*="opacity-50"],
+.app-shell-left-panel [class*="opacity-75"] {
+  color: var(--arr-text-muted-on-dark) !important;
+  opacity: 1 !important;
+}
+
+.app-shell-left-panel svg {
+  color: var(--arr-text-muted-on-dark) !important;
+}
+
+.main-surface,
+.app-shell-main-content-viewport,
+.app-shell-main-content-frame,
+[role="main"] {
+  background: var(--arr-sand-light) !important;
+}
+
+.home-banners aside,
+.composer-surface-chrome,
+[class*="bg-token-side-bar-background"]:has([aria-label="Composer utility bar"]) {
+  background: color-mix(in srgb, var(--arr-sand-light) 82%, var(--arr-sand)) !important;
+  border-color: var(--arr-rule-light) !important;
+  color: var(--arr-text-on-light) !important;
+  box-shadow: 0 12px 30px color-mix(in srgb, var(--arr-shadow) 12%, transparent) !important;
+}
+
+.home-banners [class*="bg-token-input-background"] {
+  background: transparent !important;
+}
+
+.home-banners [class*="text-token"],
+.composer-surface-chrome [class*="text-token"] {
+  color: var(--arr-text-on-light) !important;
+}
+
+.ProseMirror,
+textarea,
+[contenteditable="true"] {
+  background: transparent !important;
+  border-color: transparent !important;
+  color: var(--arr-text-on-light) !important;
+}
+
+.placeholder,
+[class*="placeholder"] {
+  color: var(--arr-sand-deep-2) !important;
+}
+
+button[data-testid="send-button"],
+button[aria-label*="Send" i],
+[class*="bg-purple"] {
+  background: var(--arr-terracotta) !important;
+  color: var(--arr-text-on-dark) !important;
+}
+
+button[data-testid="send-button"]:hover,
+button[aria-label*="Send" i]:hover {
+  background: var(--arr-terracotta-hot) !important;
+}
+
+[class*="text-purple"] {
+  color: var(--arr-terracotta) !important;
+}
+
+pre,
+code {
+  background: var(--arr-shadow) !important;
+  color: var(--arr-text-on-dark) !important;
+  font-family: var(--arr-font-meta) !important;
+}

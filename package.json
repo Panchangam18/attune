@@ -8,7 +8,9 @@
     "README.md",
     "SKILL.md",
     "agents",
-    "examples"
+    "examples",
+    "themes",
+    "scripts"
   ],
   "keywords": [
     "agent-skill",
@@ -25,8 +27,9 @@
   },
   "scripts": {
     "build": "tsc",
+    "build:arrakis": "node scripts/build-arrakis.mjs",
     "dev": "tsx src/cli.ts",
-    "prepack": "npm run build",
+    "prepack": "npm run build && npm run build:arrakis",
     "test": "npm run build && node --test test/*.test.mjs"
   },
   "devDependencies": {

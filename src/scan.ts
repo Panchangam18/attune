@@ -54,6 +54,9 @@ export function getChromiumRuntime(appPath: string): ChromiumRuntime | null {
   if (existsSync(join(frameworksPath, 'Chromium Embedded Framework.framework'))) {
     return 'cef';
   }
+  if (existsSync(join(frameworksPath, 'Codex Framework.framework'))) {
+    return 'cef';
+  }
   return null;
 }
 
