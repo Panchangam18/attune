@@ -1,0 +1,110 @@
+/* Signal Desk: a compact editorial workspace for Slack. */
+:root,
+body,
+.p-client_container,
+.p-workspace,
+#client-ui {
+  --sk_primary_background: #111617 !important;
+  --sk_primary_foreground: #e8f1ed !important;
+  --sk_highlight: #1d2a2d !important;
+  --sk_highlight_hover: #263639 !important;
+  --sk_sidebar_bg: #11343c !important;
+  --sk_sidebar_header: #0c282e !important;
+  --sk_sidebar_hover: #1a4850 !important;
+  --sk_sidebar_active: #b8f545 !important;
+  --sk_sidebar_active_hover: #caf66f !important;
+  --sk_button_primary: #b8f545 !important;
+  --sk_button_primary_hover: #caf66f !important;
+  --sk_button_primary_text: #102016 !important;
+  --sk_focus_ring: #d7ff8c !important;
+  --sk_a11y_focus_ring: #d7ff8c !important;
+  background: #111617 !important;
+  color: #e8f1ed !important;
+  font-family: Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif !important;
+}
+
+.p-client_container,
+.p-workspace,
+.p-view_contents,
+#col_messages,
+.p-message_pane,
+.p-message_pane__top_bar,
+.p-ia4_client_header {
+  background: #111617 !important;
+}
+
+.p-channel_sidebar,
+.p-sidebar,
+#col_channels,
+.p-ia4_sidebar_header,
+.p-ia4_sidebar {
+  background: #11343c !important;
+  border-right: 1px solid #2d6870 !important;
+}
+
+.p-channel_sidebar__channel--selected,
+.p-channel_sidebar__link--selected,
+.p-channel_sidebar__channel--selected:hover,
+[data-qa="channel_sidebar_name"] [aria-current="page"] {
+  background: #b8f545 !important;
+  color: #102016 !important;
+  box-shadow: inset 4px 0 0 #f2ba63 !important;
+}
+
+.p-channel_sidebar__channel--selected *,
+.p-channel_sidebar__link--selected *,
+[data-qa="channel_sidebar_name"] [aria-current="page"] * {
+  color: #102016 !important;
+}
+
+.p-channel_sidebar__channel--unread,
+.p-channel_sidebar__name--unread,
+.p-channel_sidebar__unread_count,
+.p-channel_sidebar [data-qa="unread_count"] {
+  color: #f2ba63 !important;
+  font-weight: 750 !important;
+}
+
+.p-message_pane .c-message_kit__hover,
+.p-message_pane [data-qa="message_container"]:hover {
+  background: #172225 !important;
+  box-shadow: inset 3px 0 0 #b8f545 !important;
+}
+
+.p-message_pane .c-timestamp,
+.p-message_pane .c-message__sender,
+.p-message_pane .c-message__edited_label,
+.p-message_pane [data-qa="message_time"] {
+  font-family: "SF Mono", SFMono-Regular, Menlo, Monaco, Consolas, monospace !important;
+  letter-spacing: 0 !important;
+}
+
+.p-composer,
+.p-composer__body,
+.ql-editor,
+[data-qa="message_input"] {
+  background: #15282b !important;
+  color: #e8f1ed !important;
+  border-color: #3a7478 !important;
+  border-radius: 2px !important;
+  box-shadow: 0 0 0 1px #244f54 !important;
+}
+
+.p-composer button,
+.p-composer .c-button,
+.p-message_pane .c-button,
+.p-channel_sidebar .c-button {
+  border-radius: 2px !important;
+}
+
+button[data-qa="texty_send_button"],
+.p-composer__button--send {
+  background: #b8f545 !important;
+  color: #102016 !important;
+}
+
+.p-ia4_client_header,
+.p-message_pane__top_bar,
+.p-ia4_sidebar_header {
+  border-bottom: 1px solid #244f54 !important;
+}
