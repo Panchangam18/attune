@@ -1,0 +1,13 @@
+{
+  "name": "Tama River",
+  "description": "A Hokusai print system sampled directly from Tama River's indigo, water, and paper palette.",
+  "tokens": "themes/tama-river/tokens.css",
+  "baseLayout": "themes/tama-river/base-layout.css",
+  "adapters": {
+    "Spotify": { "source": "themes/tama-river/adapters/spotify.css", "output": "examples/spotify-tama-river.css", "canvas": "dark", "runtime": "attune-compatible desktop renderer" },
+    "Slack": { "source": "themes/tama-river/adapters/slack.css", "output": "examples/slack-tama-river.css", "canvas": "dark", "runtime": "attune-compatible desktop renderer" },
+    "Visual Studio Code": { "source": "themes/tama-river/adapters/vscode.css", "output": "examples/vscode-tama-river.css", "canvas": "dark", "runtime": "attune-compatible desktop renderer" },
+    "Claude": { "source": "themes/tama-river/adapters/claude.css", "output": "examples/claude-tama-river.css", "canvas": "light", "runtime": "browser extension or compatible renderer" },
+    "ChatGPT": { "source": "themes/tama-river/adapters/chatgpt.css", "output": "examples/chatgpt-tama-river.css", "canvas": "light", "runtime": "attune-compatible desktop renderer" }
+  }
+}

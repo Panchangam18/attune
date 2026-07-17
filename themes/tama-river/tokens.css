@@ -1,0 +1,42 @@
+/*
+ * Palette sampled directly from Tama-River.jpg with FFmpeg palettegen:
+ * #d9d6b6 #d1ceb0 #c0c5ac #adb69f #9eaa97 #7e9c97
+ * #588087 #40717b #306374 #204960 #0d3456
+ */
+@font-face {
+  font-family: "Zen Kaku Gothic New";
+  src: url("./assets/ZenKakuGothicNew-Regular.ttf") format("truetype");
+  font-display: swap;
+  font-style: normal;
+  font-weight: 400;
+}
+
+@font-face {
+  font-family: "Zen Kaku Gothic New";
+  src: url("./assets/ZenKakuGothicNew-Bold.ttf") format("truetype");
+  font-display: swap;
+  font-style: normal;
+  font-weight: 700;
+}
+
+:root {
+  --att-surface: #d9d6b6;
+  --att-surface-light: #d1ceb0;
+  --att-surface-strong: #c0c5ac;
+  --att-muted-strong: #7e9c97;
+  --att-bg-dark: #0d3456;
+  --att-panel-dark: #204960;
+  --att-panel-dark-soft: #306374;
+  --att-accent: #204960;
+  --att-accent-hot: #306374;
+  --att-accent-secondary: #588087;
+  --att-text-on-light: #0d3456;
+  --att-text-muted-on-light: #40717b;
+  --att-text-on-dark: #d9d6b6;
+  --att-text-muted-on-dark: #9eaa97;
+  --att-rule-light: #9eaa97;
+  --att-rule-dark: #306374;
+  --att-font-ui: "Zen Kaku Gothic New", sans-serif;
+  --att-font-display: "Zen Kaku Gothic New", sans-serif;
+  --att-font-meta: "Zen Kaku Gothic New", sans-serif;
+}
