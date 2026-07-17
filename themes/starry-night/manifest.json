@@ -1,0 +1,13 @@
+{
+  "name": "Starry Night",
+  "description": "A Starry Night system sampled directly from the painting's midnight blues, blue strokes, and yellow light.",
+  "tokens": "themes/starry-night/tokens.css",
+  "baseLayout": "themes/starry-night/base-layout.css",
+  "adapters": {
+    "Spotify": { "source": "themes/starry-night/adapters/spotify.css", "output": "examples/spotify-starry-night.css", "canvas": "dark", "runtime": "attune-compatible desktop renderer" },
+    "Slack": { "source": "themes/starry-night/adapters/slack.css", "output": "examples/slack-starry-night.css", "canvas": "dark", "runtime": "attune-compatible desktop renderer" },
+    "Visual Studio Code": { "source": "themes/starry-night/adapters/vscode.css", "output": "examples/vscode-starry-night.css", "canvas": "dark", "runtime": "attune-compatible desktop renderer" },
+    "Claude": { "source": "themes/starry-night/adapters/claude.css", "output": "examples/claude-starry-night.css", "canvas": "dark", "runtime": "browser extension or compatible renderer" },
+    "ChatGPT": { "source": "themes/starry-night/adapters/chatgpt.css", "output": "examples/chatgpt-starry-night.css", "canvas": "dark", "runtime": "attune-compatible desktop renderer" }
+  }
+}

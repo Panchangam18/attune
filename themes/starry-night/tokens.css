@@ -1,0 +1,35 @@
+/*
+ * Palette sampled directly from starry-night.jpg with FFmpeg palettegen:
+ * #ebf2ca #ebe17d #cabd5f #c1dbbf #aabd97 #899c86 #80bbc9
+ * #629eb6 #5f828d #4b6471 #4293c9 #3577b5 #326293 #31475d
+ * #2960a5 #26282e #224580 #192b4e #191823
+ */
+@font-face {
+  font-family: "Playfair Display";
+  src: url("./assets/PlayfairDisplay[wght].ttf") format("truetype");
+  font-display: swap;
+  font-style: normal;
+  font-weight: 400 900;
+}
+
+:root {
+  --att-surface: #31475d;
+  --att-surface-light: #4b6471;
+  --att-surface-strong: #5f828d;
+  --att-muted-strong: #899c86;
+  --att-bg-dark: #191823;
+  --att-panel-dark: #192b4e;
+  --att-panel-dark-soft: #224580;
+  --att-accent: #ebe17d;
+  --att-accent-hot: #ebf2ca;
+  --att-accent-secondary: #80bbc9;
+  --att-text-on-light: #ebf2ca;
+  --att-text-muted-on-light: #c1dbbf;
+  --att-text-on-dark: #ebf2ca;
+  --att-text-muted-on-dark: #c1dbbf;
+  --att-rule-light: #629eb6;
+  --att-rule-dark: #326293;
+  --att-font-ui: "Playfair Display", Georgia, serif;
+  --att-font-display: "Playfair Display", Georgia, serif;
+  --att-font-meta: "Playfair Display", Georgia, serif;
+}
