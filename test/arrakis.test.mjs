@@ -9,7 +9,7 @@ import { promisify } from 'node:util';
 const run = promisify(execFile);
 const root = fileURLToPath(new URL('..', import.meta.url));
 test('Arrakis generates standalone stylesheets for every declared adapter', async () => {
-  await run(process.execPath, ['scripts/build-arrakis.mjs'], { cwd: root });
+  await run(process.execPath, ['scripts/build-themes.mjs', 'arrakis'], { cwd: root });
 
   const manifest = JSON.parse(await readFile(join(root, 'themes', 'arrakis', 'manifest.json'), 'utf8'));
   assert.deepEqual(Object.keys(manifest.adapters), [

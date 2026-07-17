@@ -1,0 +1,182 @@
+/* ChatGPT/Codex: continuous Attune shell for browser or compatible renderer injection. */
+:root {
+  color-scheme: light;
+  --main-surface-background: var(--att-surface-light) !important;
+  --main-surface-secondary: var(--att-surface) !important;
+  --sidebar-surface-primary: var(--att-panel-dark) !important;
+  --sidebar-surface-secondary: var(--att-bg-dark) !important;
+  --text-primary: var(--att-text-on-light) !important;
+  --text-secondary: var(--att-text-muted-on-light) !important;
+  --border-light: var(--att-rule-light) !important;
+  --accent-blue: var(--att-accent) !important;
+  --color-token-main-surface-primary: var(--att-surface-light) !important;
+  --color-token-side-bar-background: var(--att-panel-dark) !important;
+  --color-token-bg-primary: var(--att-surface-light) !important;
+  --color-token-bg-secondary: color-mix(in srgb, var(--att-surface) 88%, transparent) !important;
+  --color-token-bg-tertiary: color-mix(in srgb, var(--att-surface) 78%, transparent) !important;
+  --color-token-bg-fog: color-mix(in srgb, var(--att-bg-dark) 8%, transparent) !important;
+  --color-token-foreground: var(--att-text-on-light) !important;
+  --color-token-text-primary: var(--att-text-on-light) !important;
+  --color-token-text-secondary: var(--att-text-muted-on-light) !important;
+  --color-token-text-tertiary: var(--att-muted-strong) !important;
+  --color-token-description-foreground: var(--att-muted-strong) !important;
+  --color-token-icon-foreground: var(--att-muted-strong) !important;
+  --color-token-input-background: color-mix(in srgb, var(--att-surface-light) 88%, var(--att-surface)) !important;
+  --color-token-input-border: var(--att-rule-light) !important;
+  --color-token-border: color-mix(in srgb, var(--att-rule-light) 62%, transparent) !important;
+  --color-token-border-heavy: var(--att-rule-light) !important;
+  --color-token-list-hover-background: color-mix(in srgb, var(--att-bg-dark) 9%, transparent) !important;
+  --color-token-list-active-selection-background: color-mix(in srgb, var(--att-accent) 18%, transparent) !important;
+  --color-token-button-background: var(--att-accent) !important;
+  --color-token-button-foreground: var(--att-text-on-dark) !important;
+  --color-token-primary: var(--att-accent) !important;
+  --color-token-link: var(--att-accent-secondary) !important;
+}
+
+html,
+body,
+#__next,
+#root,
+main {
+  background: var(--att-surface-light) !important;
+  color: var(--att-text-on-light) !important;
+}
+
+h1,
+h2,
+h3 {
+  color: var(--att-bg-dark) !important;
+  font-family: var(--att-font-display) !important;
+  letter-spacing: 0 !important;
+}
+
+.app-shell-left-panel,
+.app-shell-left-panel nav {
+  --color-token-foreground: var(--att-text-on-dark) !important;
+  --color-token-text-primary: var(--att-text-on-dark) !important;
+  --color-token-text-secondary: var(--att-text-muted-on-dark) !important;
+  --color-token-text-tertiary: var(--att-surface-strong) !important;
+  --color-token-description-foreground: var(--att-text-muted-on-dark) !important;
+  --color-token-icon-foreground: var(--att-text-muted-on-dark) !important;
+  --color-token-list-hover-background: var(--att-panel-dark-soft) !important;
+  --color-token-list-active-selection-background: color-mix(in srgb, var(--att-accent) 34%, transparent) !important;
+  background: var(--att-panel-dark) !important;
+  border-color: var(--att-rule-dark) !important;
+  color: var(--att-text-on-dark) !important;
+}
+
+.app-shell-left-panel,
+.app-shell-left-panel a,
+.app-shell-left-panel button,
+.app-shell-left-panel [role="button"],
+.app-shell-left-panel [class*="text-token"] {
+  color: var(--att-text-on-dark) !important;
+}
+
+.app-shell-left-panel [class*="opacity-50"],
+.app-shell-left-panel [class*="opacity-75"] {
+  color: var(--att-text-muted-on-dark) !important;
+  opacity: 1 !important;
+}
+
+.app-shell-left-panel svg {
+  color: var(--att-text-muted-on-dark) !important;
+}
+
+.app-shell-left-panel [aria-current="page"],
+.app-shell-left-panel [aria-current="page"] *,
+.app-shell-left-panel [class*="bg-token-list"] *,
+.app-shell-left-panel [data-state="open"] *,
+.app-shell-left-panel [data-state="closed"] * {
+  color: var(--att-text-on-dark) !important;
+}
+
+.app-shell-left-panel [aria-current="page"] {
+  background: color-mix(in srgb, var(--att-accent) 28%, var(--att-panel-dark-soft)) !important;
+  box-shadow: inset 3px 0 0 var(--att-accent) !important;
+}
+
+.main-surface,
+.app-shell-main-content-viewport,
+.app-shell-main-content-frame,
+[role="main"] {
+  background: var(--att-surface-light) !important;
+}
+
+html:has(.codex-avatar-root),
+body:has(.codex-avatar-root),
+body:has(.codex-avatar-root) #root,
+body:has(.codex-avatar-root) main {
+  background: transparent !important;
+}
+
+.home-banners aside,
+[class*="bg-token-side-bar-background"]:has([aria-label="Composer utility bar"]) {
+  background: color-mix(in srgb, var(--att-surface-light) 82%, var(--att-surface)) !important;
+  border-color: var(--att-rule-light) !important;
+  color: var(--att-text-on-light) !important;
+  box-shadow: 0 12px 30px color-mix(in srgb, var(--att-bg-dark) 12%, transparent) !important;
+}
+
+.composer-surface-chrome {
+  background: color-mix(in srgb, var(--att-surface) 72%, var(--att-surface-strong)) !important;
+  border: 1px solid color-mix(in srgb, var(--att-rule-light) 78%, var(--att-bg-dark)) !important;
+  color: var(--att-text-on-light) !important;
+  box-shadow: 0 12px 30px color-mix(in srgb, var(--att-bg-dark) 14%, transparent) !important;
+}
+
+.home-banners [class*="bg-token-input-background"] {
+  background: transparent !important;
+}
+
+.home-banners [class*="text-token"],
+.composer-surface-chrome [class*="text-token"] {
+  color: var(--att-text-on-light) !important;
+}
+
+.ProseMirror,
+textarea,
+[contenteditable="true"] {
+  background: transparent !important;
+  border: 0 !important;
+  border-radius: 0 !important;
+  box-sizing: border-box !important;
+  color: var(--att-text-on-light) !important;
+  min-height: 44px !important;
+  padding: 9px 12px !important;
+}
+
+.placeholder,
+[class*="placeholder"] {
+  color: var(--att-muted-strong) !important;
+}
+
+button[data-testid="send-button"],
+button[aria-label*="Send" i],
+.composer-surface-chrome button[class*="bg-token-foreground"],
+[class*="bg-purple"] {
+  background: var(--att-accent) !important;
+  color: var(--att-text-on-dark) !important;
+  opacity: 1 !important;
+}
+
+button[data-testid="send-button"]:hover,
+button[aria-label*="Send" i]:hover,
+.composer-surface-chrome button[class*="bg-token-foreground"]:hover {
+  background: var(--att-accent-hot) !important;
+}
+
+.composer-surface-chrome button[class*="bg-token-foreground"] svg {
+  color: var(--att-text-on-dark) !important;
+}
+
+[class*="text-purple"] {
+  color: var(--att-accent) !important;
+}
+
+pre,
+code {
+  background: var(--att-bg-dark) !important;
+  color: var(--att-text-on-dark) !important;
+  font-family: var(--att-font-meta) !important;
+}

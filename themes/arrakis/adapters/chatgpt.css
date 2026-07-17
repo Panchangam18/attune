@@ -103,6 +103,13 @@ h3 {
   background: var(--arr-sand-light) !important;
 }
 
+html:has(.codex-avatar-root),
+body:has(.codex-avatar-root),
+body:has(.codex-avatar-root) #root,
+body:has(.codex-avatar-root) main {
+  background: transparent !important;
+}
+
 .home-banners aside,
 [class*="bg-token-side-bar-background"]:has([aria-label="Composer utility bar"]) {
   background: color-mix(in srgb, var(--arr-sand-light) 82%, var(--arr-sand)) !important;

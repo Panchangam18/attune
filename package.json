@@ -27,9 +27,10 @@
   },
   "scripts": {
     "build": "tsc",
-    "build:arrakis": "node scripts/build-arrakis.mjs",
+    "build:themes": "node scripts/build-themes.mjs",
+    "build:arrakis": "node scripts/build-themes.mjs arrakis",
     "dev": "tsx src/cli.ts",
-    "prepack": "npm run build && npm run build:arrakis",
+    "prepack": "npm run build && npm run build:themes",
     "test": "npm run build && node --test test/*.test.mjs"
   },
   "devDependencies": {

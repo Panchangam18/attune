@@ -1,0 +1,205 @@
+/* VS Code: retain a dark workbench with full sand-shadow token replacement. */
+body {
+  color-scheme: dark;
+  --vscode-editor-background: var(--att-bg-dark) !important;
+  --vscode-editor-foreground: var(--att-text-on-dark) !important;
+  --vscode-foreground: var(--att-text-on-dark) !important;
+  --vscode-descriptionForeground: var(--att-text-muted-on-dark) !important;
+  --vscode-disabledForeground: var(--att-muted-strong) !important;
+  --vscode-icon-foreground: var(--att-text-muted-on-dark) !important;
+  --vscode-editorLineNumber-foreground: var(--att-text-muted-on-dark) !important;
+  --vscode-editorCursor-foreground: var(--att-accent) !important;
+  --vscode-editor-selectionBackground: var(--att-accent-secondary) !important;
+  --vscode-editor-inactiveSelectionBackground: var(--att-panel-dark-soft) !important;
+  --vscode-editorGutter-background: var(--att-bg-dark) !important;
+  --vscode-editorGutter-addedBackground: var(--att-accent-secondary) !important;
+  --vscode-editorGutter-modifiedBackground: var(--att-accent) !important;
+  --vscode-editorGutter-deletedBackground: var(--att-accent) !important;
+  --vscode-editorGroupHeader-tabsBackground: var(--att-panel-dark) !important;
+  --vscode-editorGroupHeader-tabsBorder: var(--att-rule-dark) !important;
+  --vscode-editorGroup-border: var(--att-rule-dark) !important;
+  --vscode-editorWidget-background: var(--att-panel-dark) !important;
+  --vscode-editorWidget-border: var(--att-rule-dark) !important;
+  --vscode-editorSuggestWidget-background: var(--att-panel-dark) !important;
+  --vscode-editorSuggestWidget-border: var(--att-rule-dark) !important;
+  --vscode-editorSuggestWidget-foreground: var(--att-text-on-dark) !important;
+  --vscode-editorSuggestWidget-selectedBackground: var(--att-panel-dark-soft) !important;
+  --vscode-editorHoverWidget-background: var(--att-panel-dark) !important;
+  --vscode-editorHoverWidget-border: var(--att-rule-dark) !important;
+  --vscode-sideBar-background: var(--att-panel-dark) !important;
+  --vscode-sideBar-foreground: var(--att-text-on-dark) !important;
+  --vscode-activityBar-background: var(--att-bg-dark) !important;
+  --vscode-activityBar-foreground: var(--att-surface) !important;
+  --vscode-activityBar-inactiveForeground: var(--att-text-muted-on-dark) !important;
+  --vscode-statusBar-background: var(--att-accent) !important;
+  --vscode-statusBar-foreground: var(--att-text-on-dark) !important;
+  --vscode-titleBar-activeBackground: var(--att-bg-dark) !important;
+  --vscode-titleBar-activeForeground: var(--att-text-on-dark) !important;
+  --vscode-list-activeSelectionBackground: var(--att-accent-secondary) !important;
+  --vscode-list-activeSelectionForeground: var(--att-text-on-dark) !important;
+  --vscode-list-focusBackground: var(--att-panel-dark-soft) !important;
+  --vscode-list-focusForeground: var(--att-text-on-dark) !important;
+  --vscode-list-inactiveSelectionBackground: var(--att-panel-dark-soft) !important;
+  --vscode-list-inactiveSelectionForeground: var(--att-text-on-dark) !important;
+  --vscode-list-highlightForeground: var(--att-accent-hot) !important;
+  --vscode-list-hoverBackground: var(--att-panel-dark-soft) !important;
+  --vscode-list-hoverForeground: var(--att-text-on-dark) !important;
+  --vscode-focusBorder: var(--att-accent-secondary) !important;
+  --vscode-widget-border: var(--att-rule-dark) !important;
+  --vscode-tab-activeBackground: var(--att-bg-dark) !important;
+  --vscode-tab-activeForeground: var(--att-text-on-dark) !important;
+  --vscode-tab-inactiveBackground: var(--att-panel-dark) !important;
+  --vscode-tab-inactiveForeground: var(--att-text-muted-on-dark) !important;
+  --vscode-tab-activeBorderTop: var(--att-accent) !important;
+  --vscode-panel-background: var(--att-panel-dark) !important;
+  --vscode-panel-border: var(--att-rule-dark) !important;
+  --vscode-terminal-background: var(--att-bg-dark) !important;
+  --vscode-terminal-foreground: var(--att-text-on-dark) !important;
+  --vscode-input-background: var(--att-panel-dark) !important;
+  --vscode-input-foreground: var(--att-text-on-dark) !important;
+  --vscode-input-border: var(--att-rule-dark) !important;
+  --vscode-dropdown-background: var(--att-panel-dark) !important;
+  --vscode-dropdown-foreground: var(--att-text-on-dark) !important;
+  --vscode-badge-background: var(--att-accent) !important;
+  --vscode-badge-foreground: var(--att-text-on-dark) !important;
+  --vscode-button-background: var(--att-accent) !important;
+  --vscode-button-foreground: var(--att-text-on-dark) !important;
+  --vscode-button-hoverBackground: var(--att-accent-hot) !important;
+  --vscode-button-secondaryBackground: var(--att-panel-dark-soft) !important;
+  --vscode-button-secondaryForeground: var(--att-text-on-dark) !important;
+  --vscode-button-secondaryHoverBackground: var(--att-accent-secondary) !important;
+  --vscode-progressBar-background: var(--att-accent) !important;
+  --vscode-scrollbarSlider-background: var(--att-rule-dark) !important;
+  --vscode-scrollbarSlider-hoverBackground: var(--att-accent-secondary) !important;
+  --vscode-scrollbarSlider-activeBackground: var(--att-accent) !important;
+  --vscode-menu-background: var(--att-panel-dark) !important;
+  --vscode-menu-foreground: var(--att-text-on-dark) !important;
+  --vscode-menu-selectionBackground: var(--att-panel-dark-soft) !important;
+  --vscode-menu-selectionForeground: var(--att-text-on-dark) !important;
+  --vscode-quickInput-background: var(--att-panel-dark) !important;
+  --vscode-quickInput-foreground: var(--att-text-on-dark) !important;
+  --vscode-keybindingLabel-background: var(--att-panel-dark-soft) !important;
+  --vscode-keybindingLabel-foreground: var(--att-text-on-dark) !important;
+  --vscode-keybindingLabel-border: var(--att-rule-dark) !important;
+  --vscode-commandCenter-background: var(--att-panel-dark) !important;
+  --vscode-commandCenter-foreground: var(--att-text-on-dark) !important;
+  --vscode-commandCenter-border: var(--att-rule-dark) !important;
+  --vscode-sideBarSectionHeader-background: var(--att-panel-dark) !important;
+  --vscode-sideBarSectionHeader-foreground: var(--att-text-on-dark) !important;
+  --vscode-sideBarSectionHeader-border: var(--att-rule-dark) !important;
+  --vscode-notifications-background: var(--att-panel-dark) !important;
+  --vscode-notifications-foreground: var(--att-text-on-dark) !important;
+  --vscode-font-family: var(--att-font-ui) !important;
+  --vscode-editor-font-family: var(--att-font-meta) !important;
+  --vscode-editorInlayHint-fontFamily: var(--att-font-meta) !important;
+}
+
+.monaco-workbench,
+.monaco-workbench .editor,
+.monaco-editor,
+.monaco-editor-background {
+  background: var(--att-bg-dark) !important;
+}
+
+.monaco-workbench .part {
+  border-color: var(--att-rule-dark) !important;
+}
+
+.monaco-workbench .activitybar,
+.monaco-workbench .titlebar {
+  background: var(--att-bg-dark) !important;
+}
+
+.monaco-workbench .part.sidebar,
+.monaco-workbench .part.panel,
+.monaco-workbench .part.auxiliarybar {
+  background: var(--att-panel-dark) !important;
+  color: var(--att-text-on-dark) !important;
+}
+
+.monaco-workbench .part.sidebar .composite,
+.monaco-workbench .part.sidebar .pane-header,
+.monaco-workbench .part.sidebar .pane-body,
+.monaco-workbench .part.panel .composite,
+.monaco-workbench .part.auxiliarybar .composite,
+.monaco-workbench .monaco-list-rows,
+.monaco-workbench .monaco-tree-sticky-container,
+.monaco-workbench .pane-header,
+.monaco-workbench .composite .title {
+  background: var(--att-panel-dark) !important;
+  color: var(--att-text-on-dark) !important;
+}
+
+.monaco-workbench .part.editor .content,
+.monaco-workbench .editor-group-container,
+.monaco-workbench .editor-container,
+.monaco-workbench .monaco-editor .overflow-guard,
+.monaco-workbench .monaco-editor .margin,
+.monaco-workbench .tabs-container,
+.monaco-workbench .title.tabs,
+.monaco-workbench .tab,
+.monaco-workbench .tab.active,
+.monaco-workbench .monaco-breadcrumbs {
+  background: var(--att-bg-dark) !important;
+  color: var(--att-text-on-dark) !important;
+  border-color: var(--att-rule-dark) !important;
+}
+
+.monaco-workbench .tab.active .tab-border-top-container,
+.monaco-workbench .badge-content,
+.monaco-workbench .monaco-badge-content,
+.monaco-workbench .monaco-button,
+.monaco-workbench .monaco-text-button {
+  background: var(--att-accent) !important;
+  border-color: var(--att-accent) !important;
+  color: var(--att-text-on-dark) !important;
+}
+
+.monaco-workbench .monaco-list-row.focused,
+.monaco-workbench .monaco-list-row.selected,
+.monaco-workbench .monaco-list-row:hover,
+.monaco-workbench .quick-input-list .monaco-list-row.focused {
+  background: var(--att-panel-dark-soft) !important;
+  color: var(--att-text-on-dark) !important;
+}
+
+.monaco-workbench .context-view,
+.monaco-workbench .monaco-menu,
+.monaco-workbench .quick-input-widget,
+.monaco-workbench .monaco-quick-input,
+.monaco-workbench .monaco-hover,
+.monaco-workbench .editor-widget,
+.monaco-workbench .suggest-widget,
+.monaco-workbench .monaco-dialog-box {
+  background: var(--att-panel-dark) !important;
+  border-color: var(--att-rule-dark) !important;
+  color: var(--att-text-on-dark) !important;
+}
+
+.monaco-workbench .monaco-keybinding-key,
+.monaco-workbench .monaco-keybinding {
+  background: var(--att-panel-dark-soft) !important;
+  border-color: var(--att-rule-dark) !important;
+  color: var(--att-text-on-dark) !important;
+}
+
+.monaco-workbench .slider,
+.monaco-workbench .slider.active,
+.monaco-workbench .slider:hover {
+  background: var(--att-rule-dark) !important;
+}
+
+.monaco-workbench .part.statusbar {
+  background: var(--att-accent) !important;
+  color: var(--att-text-on-dark) !important;
+}
+
+.monaco-workbench .activitybar .action-item.checked .active-item-indicator:before {
+  background: var(--att-accent) !important;
+  box-shadow: 0 0 0 1px var(--att-surface) !important;
+}
+
+.monaco-workbench .monaco-list-row.selected {
+  outline: 1px solid var(--att-accent-secondary) !important;
+  outline-offset: -1px;
+}

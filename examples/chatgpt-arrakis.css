@@ -1,4 +1,4 @@
-/* Generated from themes/arrakis. Run npm run build:arrakis to refresh. */
+/* Generated from themes/arrakis. Run npm run build:themes to refresh. */
 
 /* Arrakis core tokens: wallpaper-derived sand, shadow, slate, and terracotta. */
 :root {
@@ -165,6 +165,13 @@ h3 {
 .app-shell-main-content-frame,
 [role="main"] {
   background: var(--arr-sand-light) !important;
+}
+
+html:has(.codex-avatar-root),
+body:has(.codex-avatar-root),
+body:has(.codex-avatar-root) #root,
+body:has(.codex-avatar-root) main {
+  background: transparent !important;
 }
 
 .home-banners aside,

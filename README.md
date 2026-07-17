@@ -44,7 +44,7 @@ and code signature remain unchanged.
 
 ## Design Systems
 
-### Arrakis
+### Included Theme Systems
 
 [Arrakis](themes/arrakis/README.md) is a desert-first, Dune-inspired design
 system for a personal desktop. Its shared sand, dune, ink, spice, and water
@@ -56,7 +56,7 @@ from [Typodermic](https://typodermicfonts.com/nasalization/) before applying a
 theme; Attune intentionally does not distribute the font file.
 
 ```sh
-npm run build:arrakis
+npm run build:themes
 node dist/cli.js set-css "Spotify" ./examples/spotify-arrakis.css
 ```
 
