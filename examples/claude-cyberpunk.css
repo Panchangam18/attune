@@ -1,0 +1,132 @@
+/* Generated from themes/cyberpunk. Run npm run build:themes to refresh. */
+
+/* Cyberpunk core tokens: deep night, electric cyan, and magenta signal. */
+:root {
+  --att-surface: #090711;
+  --att-surface-light: #100b1a;
+  --att-surface-strong: #251635;
+  --att-muted-strong: #89779b;
+  --att-bg-dark: #07050b;
+  --att-panel-dark: #130d20;
+  --att-panel-dark-soft: #211333;
+  --att-accent: #ff3da6;
+  --att-accent-hot: #ff78c7;
+  --att-accent-secondary: #00e5ff;
+  --att-text-on-light: #f5efff;
+  --att-text-muted-on-light: #bcaec9;
+  --att-text-on-dark: #f5efff;
+  --att-text-muted-on-dark: #bcaec9;
+  --att-rule-light: #513265;
+  --att-rule-dark: #39224d;
+  --att-font-ui: "SF Mono", Menlo, monospace;
+  --att-font-display: var(--att-font-ui);
+  --att-font-meta: var(--att-font-ui);
+}
+
+/* Shared base: app adapters choose light or dark canvas mode explicitly. */
+
+html,
+body,
+body *:not(.codicon):not([class^="codicon"]):not([class*=" codicon"]) {
+  font-family: var(--att-font-ui) !important;
+}
+
+::selection {
+  background: var(--att-accent) !important;
+  color: var(--att-text-on-dark) !important;
+}
+
+button,
+[role="button"],
+input,
+textarea,
+select {
+  border-radius: 2px !important;
+}
+
+:focus-visible {
+  outline: 2px solid var(--att-accent-secondary) !important;
+  outline-offset: 2px !important;
+}
+
+/* Claude: sand canvas for a light conversational surface. */
+:root,
+html,
+body {
+  color-scheme: dark;
+  --bg-000: var(--att-surface) !important;
+  --bg-100: var(--att-surface-light) !important;
+  --bg-200: var(--att-surface-light) !important;
+  --bg-300: var(--att-surface-strong) !important;
+  --bg-400: var(--att-muted-strong) !important;
+  --bg-500: var(--att-accent-secondary) !important;
+  --text-000: var(--att-text-on-light) !important;
+  --text-100: var(--att-text-on-light) !important;
+  --text-200: var(--att-text-muted-on-light) !important;
+  --text-300: var(--att-text-muted-on-light) !important;
+  --text-400: var(--att-accent-secondary) !important;
+  --text-500: var(--att-bg-dark) !important;
+  --accent-main-000: var(--att-accent) !important;
+  --accent-main-100: var(--att-accent-hot) !important;
+  --accent-main-200: var(--att-muted-strong) !important;
+  --accent-main-900: var(--att-bg-dark) !important;
+  --accent-secondary-000: var(--att-accent-secondary) !important;
+  --accent-secondary-100: var(--att-panel-dark-soft) !important;
+  --accent-pro-000: var(--att-accent-secondary) !important;
+  --accent-pro-100: var(--att-panel-dark-soft) !important;
+  --border-100: var(--att-surface-light) !important;
+  --border-200: var(--att-rule-light) !important;
+  --border-300: var(--att-muted-strong) !important;
+  --border-400: var(--att-accent-secondary) !important;
+  --oncolor-100: var(--att-text-on-dark) !important;
+}
+
+html,
+body,
+#root,
+.flex.min-h-screen,
+main {
+  background-color: var(--att-surface) !important;
+  color: var(--att-text-on-light) !important;
+}
+
+h1,
+h2,
+h3 {
+  color: var(--att-text-on-dark) !important;
+  font-family: var(--att-font-display) !important;
+  letter-spacing: 0 !important;
+}
+
+aside,
+nav {
+  background: var(--att-accent-secondary) !important;
+  border-color: var(--att-bg-dark) !important;
+  color: var(--att-text-on-dark) !important;
+}
+
+textarea,
+[contenteditable="true"] {
+  background: var(--att-surface-light) !important;
+  border-color: var(--att-rule-light) !important;
+  color: var(--att-text-on-light) !important;
+}
+
+button[data-testid="send-button"],
+.bg-accent-main-000,
+.bg-accent-main-100,
+[class*="bg-purple"] {
+  background-color: var(--att-accent) !important;
+  color: var(--att-text-on-dark) !important;
+}
+
+[class*="text-purple"] {
+  color: var(--att-accent) !important;
+}
+
+pre,
+code {
+  background: var(--att-bg-dark) !important;
+  color: var(--att-text-on-dark) !important;
+  font-family: var(--att-font-meta) !important;
+}

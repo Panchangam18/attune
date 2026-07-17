@@ -1,0 +1,13 @@
+{
+  "name": "Cyberpunk",
+  "description": "A nocturnal high-signal desktop system with cyan, magenta, and acid-green highlights.",
+  "tokens": "themes/cyberpunk/tokens.css",
+  "baseLayout": "themes/cyberpunk/base-layout.css",
+  "adapters": {
+    "Spotify": { "source": "themes/cyberpunk/adapters/spotify.css", "output": "examples/spotify-cyberpunk.css", "canvas": "dark", "runtime": "attune-compatible desktop renderer" },
+    "Slack": { "source": "themes/cyberpunk/adapters/slack.css", "output": "examples/slack-cyberpunk.css", "canvas": "dark", "runtime": "attune-compatible desktop renderer" },
+    "Visual Studio Code": { "source": "themes/cyberpunk/adapters/vscode.css", "output": "examples/vscode-cyberpunk.css", "canvas": "dark", "runtime": "attune-compatible desktop renderer" },
+    "Claude": { "source": "themes/cyberpunk/adapters/claude.css", "output": "examples/claude-cyberpunk.css", "canvas": "dark", "runtime": "browser extension or compatible renderer" },
+    "ChatGPT": { "source": "themes/cyberpunk/adapters/chatgpt.css", "output": "examples/chatgpt-cyberpunk.css", "canvas": "dark", "runtime": "attune-compatible desktop renderer" }
+  }
+}

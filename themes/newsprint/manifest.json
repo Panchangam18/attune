@@ -1,0 +1,13 @@
+{
+  "name": "Newsprint",
+  "description": "A warm editorial desktop system in paper, ink, blue, and red.",
+  "tokens": "themes/newsprint/tokens.css",
+  "baseLayout": "themes/newsprint/base-layout.css",
+  "adapters": {
+    "Spotify": { "source": "themes/newsprint/adapters/spotify.css", "output": "examples/spotify-newsprint.css", "canvas": "dark", "runtime": "attune-compatible desktop renderer" },
+    "Slack": { "source": "themes/newsprint/adapters/slack.css", "output": "examples/slack-newsprint.css", "canvas": "dark", "runtime": "attune-compatible desktop renderer" },
+    "Visual Studio Code": { "source": "themes/newsprint/adapters/vscode.css", "output": "examples/vscode-newsprint.css", "canvas": "dark", "runtime": "attune-compatible desktop renderer" },
+    "Claude": { "source": "themes/newsprint/adapters/claude.css", "output": "examples/claude-newsprint.css", "canvas": "light", "runtime": "browser extension or compatible renderer" },
+    "ChatGPT": { "source": "themes/newsprint/adapters/chatgpt.css", "output": "examples/chatgpt-newsprint.css", "canvas": "light", "runtime": "attune-compatible desktop renderer" }
+  }
+}

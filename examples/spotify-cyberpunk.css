@@ -1,0 +1,223 @@
+/* Generated from themes/cyberpunk. Run npm run build:themes to refresh. */
+
+/* Cyberpunk core tokens: deep night, electric cyan, and magenta signal. */
+:root {
+  --att-surface: #090711;
+  --att-surface-light: #100b1a;
+  --att-surface-strong: #251635;
+  --att-muted-strong: #89779b;
+  --att-bg-dark: #07050b;
+  --att-panel-dark: #130d20;
+  --att-panel-dark-soft: #211333;
+  --att-accent: #ff3da6;
+  --att-accent-hot: #ff78c7;
+  --att-accent-secondary: #00e5ff;
+  --att-text-on-light: #f5efff;
+  --att-text-muted-on-light: #bcaec9;
+  --att-text-on-dark: #f5efff;
+  --att-text-muted-on-dark: #bcaec9;
+  --att-rule-light: #513265;
+  --att-rule-dark: #39224d;
+  --att-font-ui: "SF Mono", Menlo, monospace;
+  --att-font-display: var(--att-font-ui);
+  --att-font-meta: var(--att-font-ui);
+}
+
+/* Shared base: app adapters choose light or dark canvas mode explicitly. */
+
+html,
+body,
+body *:not(.codicon):not([class^="codicon"]):not([class*=" codicon"]) {
+  font-family: var(--att-font-ui) !important;
+}
+
+::selection {
+  background: var(--att-accent) !important;
+  color: var(--att-text-on-dark) !important;
+}
+
+button,
+[role="button"],
+input,
+textarea,
+select {
+  border-radius: 2px !important;
+}
+
+:focus-visible {
+  outline: 2px solid var(--att-accent-secondary) !important;
+  outline-offset: 2px !important;
+}
+
+/* Spotify: preserve its dark listening context with a sand-shadow base. */
+:root {
+  color-scheme: dark;
+  --background-base: var(--att-bg-dark) !important;
+  --background-highlight: var(--att-panel-dark) !important;
+  --background-press: var(--att-panel-dark-soft) !important;
+  --background-elevated-base: var(--att-panel-dark) !important;
+  --background-elevated-highlight: var(--att-panel-dark-soft) !important;
+  --background-elevated-press: var(--att-accent-secondary) !important;
+  --background-tinted-base: var(--att-panel-dark-soft) !important;
+  --background-tinted-highlight: var(--att-accent-secondary) !important;
+  --background-tinted-press: var(--att-accent-secondary) !important;
+  --text-base: var(--att-text-on-dark) !important;
+  --text-subdued: var(--att-text-muted-on-dark) !important;
+  --text-bright-accent: var(--att-accent) !important;
+  --text-positive: var(--att-accent) !important;
+  --essential-base: var(--att-accent) !important;
+  --essential-subdued: var(--att-accent-secondary) !important;
+  --essential-bright-accent: var(--att-accent) !important;
+  --essential-positive: var(--att-accent) !important;
+  --decorative-base: var(--att-accent-secondary) !important;
+  --decorative-subdued: var(--att-panel-dark-soft) !important;
+  --decorative-bright-accent: var(--att-accent) !important;
+  --decorative-positive: var(--att-accent) !important;
+  --decorative-warning: var(--att-surface) !important;
+  --decorative-negative: var(--att-accent) !important;
+  --spice-button: var(--att-accent) !important;
+  --spice-button-active: var(--att-accent-hot) !important;
+  --spice-tab-active: var(--att-accent-secondary) !important;
+}
+
+html,
+body,
+#main,
+[data-testid="root"],
+#main-view,
+[data-testid="main-view-container"] {
+  background: var(--att-bg-dark) !important;
+  color: var(--att-text-on-dark) !important;
+}
+
+[data-testid="global-nav-bar"],
+[data-testid="left-sidebar"],
+nav[aria-label="Main"],
+[data-testid="now-playing-bar"] {
+  background: var(--att-panel-dark) !important;
+  border-color: var(--att-rule-dark) !important;
+}
+
+[data-testid="left-sidebar"] a,
+[data-testid="left-sidebar"] [data-encore-id="text"],
+nav[aria-label="Main"] [data-encore-id="text"] {
+  color: var(--att-text-on-dark) !important;
+}
+
+main h1,
+main h2,
+main h3,
+[data-testid="playlist-page-title"],
+[data-testid="context-item-info-title"] {
+  color: var(--att-text-on-dark) !important;
+  font-family: var(--att-font-display) !important;
+  letter-spacing: 0 !important;
+}
+
+[data-testid="track-list-row"],
+[data-testid="playlist-card"],
+[data-testid="album-card"],
+[data-testid="artist-card"] {
+  background: var(--att-panel-dark) !important;
+  border-color: var(--att-rule-dark) !important;
+  color: var(--att-text-on-dark) !important;
+}
+
+[data-testid="track-list-row"]:hover,
+[data-testid="playlist-card"]:hover,
+[data-testid="album-card"]:hover,
+[data-testid="artist-card"]:hover {
+  background: var(--att-panel-dark-soft) !important;
+  box-shadow: inset 3px 0 0 var(--att-accent) !important;
+}
+
+[data-testid="track-list-row"] [data-testid="internal-track-link"],
+[data-testid="now-playing-bar"] [data-testid="context-item-info-subtitles"] {
+  font-family: var(--att-font-meta) !important;
+  letter-spacing: 0 !important;
+}
+
+[data-testid="now-playing-bar"] {
+  background: var(--att-bg-dark) !important;
+  border-top: 2px solid var(--att-accent) !important;
+  color: var(--att-text-on-dark) !important;
+}
+
+[data-testid="now-playing-bar"] [data-encore-id="text"],
+[data-testid="now-playing-bar"] a {
+  color: var(--att-text-on-dark) !important;
+}
+
+/* Card and library controls appear only when their item is being explored. */
+[data-testid="play-button"] {
+  background: transparent !important;
+  border-color: transparent !important;
+  border-radius: 50% !important;
+  opacity: 0 !important;
+  color: var(--att-bg-dark) !important;
+}
+
+[data-testid="play-button"] .e-10451-button-primary__inner {
+  background: transparent !important;
+}
+
+[data-testid="play-button"]:hover,
+[data-testid="play-button"]:focus-visible,
+[data-testid="track-list-row"]:hover [data-testid="play-button"],
+[data-testid="playlist-card"]:hover [data-testid="play-button"],
+[data-testid="album-card"]:hover [data-testid="play-button"],
+[data-testid="artist-card"]:hover [data-testid="play-button"],
+.e-10451-box--interactive:hover [data-testid="play-button"],
+.e-10451-card:hover [data-testid="play-button"],
+.e-10451-legacy-list-row__header-side:hover [data-testid="play-button"] {
+  background: var(--att-accent) !important;
+  border-color: var(--att-accent) !important;
+  opacity: 1 !important;
+}
+
+[data-testid="play-button"]:hover .e-10451-button-primary__inner,
+[data-testid="play-button"]:focus-visible .e-10451-button-primary__inner,
+[data-testid="track-list-row"]:hover [data-testid="play-button"] .e-10451-button-primary__inner,
+[data-testid="playlist-card"]:hover [data-testid="play-button"] .e-10451-button-primary__inner,
+[data-testid="album-card"]:hover [data-testid="play-button"] .e-10451-button-primary__inner,
+[data-testid="artist-card"]:hover [data-testid="play-button"] .e-10451-button-primary__inner,
+.e-10451-box--interactive:hover [data-testid="play-button"] .e-10451-button-primary__inner,
+.e-10451-card:hover [data-testid="play-button"] .e-10451-button-primary__inner,
+.e-10451-legacy-list-row__header-side:hover [data-testid="play-button"] .e-10451-button-primary__inner {
+  background: var(--att-accent) !important;
+}
+
+[data-testid="control-button-playpause"] {
+  background: var(--att-accent) !important;
+  border-color: var(--att-accent) !important;
+  border-radius: 50% !important;
+  color: var(--att-bg-dark) !important;
+}
+
+[data-testid="control-button-playpause"] .e-10451-button-primary__inner {
+  background: var(--att-accent) !important;
+}
+
+[data-testid="control-button-playpause"]:hover {
+  background: var(--att-accent-hot) !important;
+  border-color: var(--att-accent-hot) !important;
+}
+
+[data-testid="control-button-playpause"]:hover .e-10451-button-primary__inner {
+  background: var(--att-accent-hot) !important;
+}
+
+[data-testid="playback-progressbar"] [role="slider"],
+[data-testid="volume-bar"] [role="slider"] {
+  --progress-bar-bg: var(--att-accent) !important;
+  --progress-bar-fg: var(--att-accent) !important;
+}
+
+[style*="#af2896" i],
+[style*="#a855f7" i] {
+  background-color: var(--att-accent) !important;
+  border-color: var(--att-accent) !important;
+  color: var(--att-accent) !important;
+  fill: var(--att-accent) !important;
+  stroke: var(--att-accent) !important;
+}

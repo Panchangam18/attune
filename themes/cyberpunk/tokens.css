@@ -1,0 +1,22 @@
+/* Cyberpunk core tokens: deep night, electric cyan, and magenta signal. */
+:root {
+  --att-surface: #090711;
+  --att-surface-light: #100b1a;
+  --att-surface-strong: #251635;
+  --att-muted-strong: #89779b;
+  --att-bg-dark: #07050b;
+  --att-panel-dark: #130d20;
+  --att-panel-dark-soft: #211333;
+  --att-accent: #ff3da6;
+  --att-accent-hot: #ff78c7;
+  --att-accent-secondary: #00e5ff;
+  --att-text-on-light: #f5efff;
+  --att-text-muted-on-light: #bcaec9;
+  --att-text-on-dark: #f5efff;
+  --att-text-muted-on-dark: #bcaec9;
+  --att-rule-light: #513265;
+  --att-rule-dark: #39224d;
+  --att-font-ui: "SF Mono", Menlo, monospace;
+  --att-font-display: var(--att-font-ui);
+  --att-font-meta: var(--att-font-ui);
+}
