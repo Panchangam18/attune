@@ -1,0 +1,13 @@
+{
+  "name": "Matrix",
+  "description": "A phosphor-green terminal system on a near-black canvas.",
+  "tokens": "themes/matrix/tokens.css",
+  "baseLayout": "themes/matrix/base-layout.css",
+  "adapters": {
+    "Spotify": { "source": "themes/matrix/adapters/spotify.css", "output": "examples/spotify-matrix.css", "canvas": "dark", "runtime": "attune-compatible desktop renderer" },
+    "Slack": { "source": "themes/matrix/adapters/slack.css", "output": "examples/slack-matrix.css", "canvas": "dark", "runtime": "attune-compatible desktop renderer" },
+    "Visual Studio Code": { "source": "themes/matrix/adapters/vscode.css", "output": "examples/vscode-matrix.css", "canvas": "dark", "runtime": "attune-compatible desktop renderer" },
+    "Claude": { "source": "themes/matrix/adapters/claude.css", "output": "examples/claude-matrix.css", "canvas": "dark", "runtime": "browser extension or compatible renderer" },
+    "ChatGPT": { "source": "themes/matrix/adapters/chatgpt.css", "output": "examples/chatgpt-matrix.css", "canvas": "dark", "runtime": "attune-compatible desktop renderer" }
+  }
+}

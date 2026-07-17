@@ -1,4 +1,4 @@
-/* VS Code: retain a dark workbench with full sand-shadow token replacement. */
+/* VS Code: terminal workbench with full phosphor token replacement. */
 body {
   color-scheme: dark;
   --vscode-editor-background: var(--att-bg-dark) !important;
