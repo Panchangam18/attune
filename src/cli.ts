@@ -4,7 +4,7 @@ import { existsSync, readFileSync } from 'fs';
 import { resolve } from 'path';
 import { setStylesheetSource } from './config.js';
 import { scanForSupportedApps, findApp, getAppId } from './scan.js';
-import { getSession, launch, runWatcher, stopSession } from './session.js';
+import { attach, getSession, launch, runWatcher, stopSession } from './session.js';
 
 const [, , command, ...args] = process.argv;
 void main(command, args);
@@ -19,6 +19,9 @@ async function main(command: string | undefined, args: string[]) {
       break;
     case 'launch':
       await cmdLaunch(args[0]);
+      break;
+    case 'attach':
+      cmdAttach(args[0], args[1]);
       break;
     case 'stop':
       cmdStop(args[0]);
@@ -105,6 +108,23 @@ async function cmdLaunch(query: string | undefined) {
   }
 }
 
+function cmdAttach(query: string | undefined, rawPort: string | undefined) {
+  const port = Number(rawPort);
+  if (!query || !Number.isInteger(port) || port <= 0 || port > 65535) {
+    console.error('Usage: attune attach <app-name> <remote-debugging-port>');
+    process.exit(1);
+  }
+
+  const app = findApp(scanForSupportedApps(), query);
+  if (!app) {
+    console.error(`No supported Chromium app found matching "${query}".`);
+    process.exit(1);
+  }
+
+  attach(app, process.argv[1], port);
+  console.log(`Attached Attune to "${app.name}" on localhost:${port}.`);
+}
+
 function cmdStop(query: string | undefined) {
   if (!query) {
     console.error('Usage: attune stop <app-name>');
@@ -160,6 +180,7 @@ Usage:
   attune scan                        Scan supported Chromium desktop apps
   attune set-css <app-name> <file>   Set custom CSS for an app
   attune launch <app-name>           Launch without modifying the app bundle
+  attune attach <app-name> <port>    Attach to an app already running with DevTools
   attune status <app-name>           Show an Attune session
   attune stop <app-name>             Stop applying styles to a session
 `);

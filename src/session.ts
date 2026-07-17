@@ -74,6 +74,34 @@ export async function launch(app: DiscoveredApp, cliPath: string): Promise<{ por
   return { port };
 }
 
+/** Attach a watcher to an app that is already running with remote debugging enabled. */
+export function attach(app: DiscoveredApp, cliPath: string, port: number): void {
+  if (!Number.isInteger(port) || port <= 0 || port > 65535) {
+    throw new Error(`Invalid remote debugging port: ${port}`);
+  }
+
+  const appId = getAppId(app);
+  const configPath = ensureConfig(appId);
+  const sessionPath = getSessionPath(appId);
+  stopSession(appId);
+
+  const watcher = spawn(process.execPath, [cliPath, '_watch', configPath, String(port), sessionPath], {
+    detached: true,
+    stdio: 'ignore',
+  });
+  watcher.unref();
+
+  writeSession(sessionPath, {
+    appId,
+    appPath: app.path,
+    port,
+    status: 'starting',
+    targetCount: 0,
+    updatedAt: new Date().toISOString(),
+    watcherPid: watcher.pid ?? 0,
+  });
+}
+
 export function stopSession(appId: string): boolean {
   const sessionPath = getSessionPath(appId);
   const session = readSession(sessionPath);
