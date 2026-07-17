@@ -1,15 +1,15 @@
-/* Cyberpunk core tokens: deep night, electric cyan, magenta signal, and Interceptor. */
+/* Cyberpunk core tokens: deep night, electric cyan, magenta signal, and Rajdhani. */
 @font-face {
-  font-family: "Interceptor";
-  src: url("./assets/Interceptor.otf") format("opentype");
+  font-family: "Rajdhani";
+  src: url("./assets/Rajdhani-Medium.ttf") format("truetype");
   font-display: swap;
   font-style: normal;
   font-weight: 400;
 }
 
 @font-face {
-  font-family: "Interceptor";
-  src: url("./assets/Interceptor-Bold.otf") format("opentype");
+  font-family: "Rajdhani";
+  src: url("./assets/Rajdhani-Bold.ttf") format("truetype");
   font-display: swap;
   font-style: normal;
   font-weight: 700;
@@ -32,7 +32,7 @@
   --att-text-muted-on-dark: #bcaec9;
   --att-rule-light: #513265;
   --att-rule-dark: #39224d;
-  --att-font-ui: "Interceptor", "SF Mono", Menlo, monospace;
-  --att-font-display: "Interceptor", "SF Mono", Menlo, monospace;
+  --att-font-ui: "Rajdhani", "SF Mono", Menlo, monospace;
+  --att-font-display: "Rajdhani", "SF Mono", Menlo, monospace;
   --att-font-meta: "SF Mono", Menlo, monospace;
 }
