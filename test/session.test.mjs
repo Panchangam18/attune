@@ -31,10 +31,12 @@ test('style injection expression serializes and manages stylesheet text safely',
     },
   };
 
-  assert.equal(vm.runInNewContext(expression, { document }), 'applied');
+  const window = {};
+
+  assert.equal(vm.runInNewContext(expression, { document, window }), 'applied');
   assert.equal(styles.get('attune-custom-stylesheet').textContent, css);
-  assert.equal(vm.runInNewContext(expression, { document }), 'current');
-  assert.equal(vm.runInNewContext(buildStyleInjectionExpression(''), { document }), 'removed');
+  assert.equal(vm.runInNewContext(expression, { document, window }), 'current');
+  assert.equal(vm.runInNewContext(buildStyleInjectionExpression(''), { document, window }), 'removed');
   assert.equal(styles.size, 0);
 });
 
@@ -43,6 +45,9 @@ test('style injection expression runs optional workspace script blocks', () => {
 
 /* @attune-script
 window.__attuneScriptRuns = (window.__attuneScriptRuns || 0) + 1;
+window.__attuneRegisterCleanup?.(() => {
+  window.__attuneScriptCleanups = (window.__attuneScriptCleanups || 0) + 1;
+});
 @end-attune-script */`;
   const styles = new Map();
   const document = {
@@ -67,13 +72,15 @@ window.__attuneScriptRuns = (window.__attuneScriptRuns || 0) + 1;
 
   assert.deepEqual(splitWorkspaceSource(source), {
     css: 'body { color: teal; }',
-    script: 'window.__attuneScriptRuns = (window.__attuneScriptRuns || 0) + 1;',
+    script: 'window.__attuneScriptRuns = (window.__attuneScriptRuns || 0) + 1;\nwindow.__attuneRegisterCleanup?.(() => {\n  window.__attuneScriptCleanups = (window.__attuneScriptCleanups || 0) + 1;\n});',
   });
   assert.equal(vm.runInNewContext(buildStyleInjectionExpression(source), { document, window, console }), 'applied');
   assert.equal(styles.get('attune-custom-stylesheet').textContent, 'body { color: teal; }');
   assert.equal(window.__attuneScriptRuns, 1);
   assert.equal(vm.runInNewContext(buildStyleInjectionExpression(source), { document, window, console }), 'current');
-  assert.equal(window.__attuneScriptRuns, 2);
+  assert.equal(window.__attuneScriptRuns, 1);
+  assert.equal(vm.runInNewContext(buildStyleInjectionExpression('body { color: plum; }'), { document, window, console }), 'applied');
+  assert.equal(window.__attuneScriptCleanups, 1);
 });
 
 test('stylesheet reads live source edits and falls back to the saved CSS', async (t) => {

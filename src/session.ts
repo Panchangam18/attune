@@ -259,7 +259,10 @@ export function buildStyleInjectionExpression(css: string): string {
   const hash = ${safeHash};
   const css = ${safeCss};
   const script = ${safeScript};
+  const cleanupKey = '__attuneWorkspaceScriptCleanup';
+  const scriptHashKey = '__attuneWorkspaceScriptHash';
   const current = document.getElementById(id);
+  const sourceChanged = window[scriptHashKey] !== hash;
   let status = 'current';
   if (!css) {
     current?.remove();
@@ -272,7 +275,27 @@ export function buildStyleInjectionExpression(css: string): string {
     if (!current) document.head.append(style);
     status = 'applied';
   }
-  if (script) {
+  if (sourceChanged) {
+    try {
+      window[cleanupKey]?.();
+    } catch (error) {
+      console.warn('[attune] workspace script cleanup failed', error);
+    }
+    window[cleanupKey] = undefined;
+    window[scriptHashKey] = hash;
+  }
+  if (script && sourceChanged) {
+    window.__attuneRegisterCleanup = cleanup => {
+      if (typeof cleanup !== 'function') return;
+      const previousCleanup = window[cleanupKey];
+      window[cleanupKey] = () => {
+        try {
+          previousCleanup?.();
+        } finally {
+          cleanup();
+        }
+      };
+    };
     try {
       (0, eval)(script);
     } catch (error) {
