@@ -37,10 +37,11 @@ test('Arrakis generates standalone stylesheets for every declared adapter', asyn
     assert.match(stylesheet, /--arr-font-ui: "Nasalization"/);
     assert.match(stylesheet, /--arr-font-display: var\(--arr-font-ui\)/);
     assert.match(stylesheet, /--arr-font-meta: var\(--arr-font-ui\)/);
+    assert.match(stylesheet, /@font-face\s*\{[\s\S]*?font-family:\s*"Nasalization";[\s\S]*?data:font\/otf;base64,/);
     assert.match(stylesheet, /body \*:not\(.codicon\)/);
     const fontFamilyDeclarations = stylesheet.match(/font-family\s*:\s*[^;]+;/gi) ?? [];
     for (const declaration of fontFamilyDeclarations) {
-      assert.match(declaration, /var\(--arr-font-(?:ui|display|meta)\)/);
+      assert.match(declaration, /(?:"Nasalization"|var\(--arr-font-(?:ui|display|meta)\))/);
     }
 
     const directColorDeclarations = adapterSource.match(

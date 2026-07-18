@@ -1,6 +1,6 @@
 {
   "name": "attune",
-  "version": "0.1.7",
+  "version": "0.1.8",
   "description": "Agent skill and live CSS runtime for Chromium desktop apps",
   "type": "module",
   "files": [

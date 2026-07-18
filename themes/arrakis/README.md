@@ -11,11 +11,10 @@ decisive action, while blue slate is used only for focus and secondary status.
 Adapters replace each application's known accent token families to avoid
 leftover purple, green, or unrelated brand colors in the interface.
 
-All readable interface text uses Nasalization Regular. Install the face locally
-from [Typodermic](https://typodermicfonts.com/nasalization/) on each target Mac;
-it is intentionally not bundled with Attune because its free desktop license
-does not permit app or web embedding. The shared base leaves VS Code's `codicon`
-glyphs alone so its iconography continues to render.
+All readable interface text uses Nasalization Regular. The font asset is part of
+this theme and is embedded into each generated or applied stylesheet, so target
+apps do not depend on the font being installed on a user's Mac. The shared base
+leaves VS Code's `codicon` glyphs alone so its iconography continues to render.
 
 ## Structure
 

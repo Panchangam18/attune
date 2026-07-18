@@ -1,4 +1,12 @@
 /* Arrakis core tokens: wallpaper-derived sand, shadow, slate, and terracotta. */
+@font-face {
+  font-family: "Nasalization";
+  src: url("./assets/Nasalization-Regular.otf") format("opentype");
+  font-display: swap;
+  font-style: normal;
+  font-weight: 400;
+}
+
 :root {
   --arr-sand: #b7a77d;
   --arr-sand-deep-1: #988a66;
