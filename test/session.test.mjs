@@ -6,7 +6,7 @@ import test from 'node:test';
 import vm from 'node:vm';
 import { readStylesheet } from '../dist/config.js';
 import { getChromiumRuntime } from '../dist/scan.js';
-import { buildStyleInjectionExpression } from '../dist/session.js';
+import { buildStyleInjectionExpression, splitWorkspaceSource } from '../dist/session.js';
 
 test('style injection expression serializes and manages stylesheet text safely', () => {
   const css = "html::before { content: 'quoted \\ value'; }";
@@ -36,6 +36,44 @@ test('style injection expression serializes and manages stylesheet text safely',
   assert.equal(vm.runInNewContext(expression, { document }), 'current');
   assert.equal(vm.runInNewContext(buildStyleInjectionExpression(''), { document }), 'removed');
   assert.equal(styles.size, 0);
+});
+
+test('style injection expression runs optional workspace script blocks', () => {
+  const source = `body { color: teal; }
+
+/* @attune-script
+window.__attuneScriptRuns = (window.__attuneScriptRuns || 0) + 1;
+@end-attune-script */`;
+  const styles = new Map();
+  const document = {
+    head: {
+      append(style) {
+        styles.set(style.id, style);
+      },
+    },
+    createElement() {
+      return {
+        dataset: {},
+        remove() {
+          styles.delete(this.id);
+        },
+      };
+    },
+    getElementById(id) {
+      return styles.get(id) || null;
+    },
+  };
+  const window = {};
+
+  assert.deepEqual(splitWorkspaceSource(source), {
+    css: 'body { color: teal; }',
+    script: 'window.__attuneScriptRuns = (window.__attuneScriptRuns || 0) + 1;',
+  });
+  assert.equal(vm.runInNewContext(buildStyleInjectionExpression(source), { document, window, console }), 'applied');
+  assert.equal(styles.get('attune-custom-stylesheet').textContent, 'body { color: teal; }');
+  assert.equal(window.__attuneScriptRuns, 1);
+  assert.equal(vm.runInNewContext(buildStyleInjectionExpression(source), { document, window, console }), 'current');
+  assert.equal(window.__attuneScriptRuns, 2);
 });
 
 test('stylesheet reads live source edits and falls back to the saved CSS', async (t) => {

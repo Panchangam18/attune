@@ -4,12 +4,16 @@ import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync 
 import { homedir } from 'os';
 import { dirname, join } from 'path';
 import { createServer } from 'net';
+import { createServer as createHttpServer, type IncomingMessage, type ServerResponse } from 'http';
 import { ensureConfig, readStylesheet } from './config.js';
 import { type DiscoveredApp, getAppExecutablePath, getAppId } from './scan.js';
 
 const ATTUNE_DIR = join(homedir(), '.attune');
 const SESSION_DIR = join(ATTUNE_DIR, 'sessions');
+const WORKSPACE_BRIDGE_PATH = join(ATTUNE_DIR, 'workspace-bridge.json');
+const WORKSPACE_BRIDGE_PORT = 47655;
 const STYLE_ELEMENT_ID = 'attune-custom-stylesheet';
+const WORKSPACE_SCRIPT_RE = /\/\*\s*@attune-script\s*\n([\s\S]*?)\n\s*@end-attune-script\s*\*\//g;
 const POLL_INTERVAL_MS = 500;
 const MAX_MISSED_POLLS = 120;
 
@@ -126,6 +130,7 @@ export function getSession(appId: string): SessionRecord | null {
 export async function runWatcher(configPath: string, port: number, sessionPath: string): Promise<void> {
   let stopped = false;
   let missedPolls = 0;
+  startWorkspaceBridgeServer();
 
   const stop = () => {
     stopped = true;
@@ -164,29 +169,131 @@ export async function runWatcher(configPath: string, port: number, sessionPath: 
   }
 }
 
+function startWorkspaceBridgeServer(): void {
+  const server = createHttpServer((request, response) => {
+    void handleWorkspaceBridgeRequest(request, response);
+  });
+  server.on('error', error => {
+    if ('code' in error && error.code === 'EADDRINUSE') return;
+    console.warn('[attune] workspace bridge unavailable', error);
+  });
+  server.listen(WORKSPACE_BRIDGE_PORT, '127.0.0.1');
+}
+
+async function handleWorkspaceBridgeRequest(request: IncomingMessage, response: ServerResponse): Promise<void> {
+  response.setHeader('Access-Control-Allow-Origin', '*');
+  response.setHeader('Access-Control-Allow-Methods', 'GET,POST,OPTIONS');
+  response.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+  response.setHeader('Cache-Control', 'no-store');
+
+  if (request.method === 'OPTIONS') {
+    response.writeHead(204);
+    response.end();
+    return;
+  }
+
+  const key = decodeURIComponent((request.url || '/').replace(/^\/v1\/?/, '').replace(/^\/+/, ''));
+  if (!key || key.includes('/') || key.length > 120) {
+    writeJson(response, 404, { error: 'Unknown workspace bridge key.' });
+    return;
+  }
+
+  if (request.method === 'GET') {
+    const store = readWorkspaceBridgeStore();
+    writeJson(response, 200, store[key] ?? null);
+    return;
+  }
+
+  if (request.method === 'POST') {
+    const payload = await readJsonBody(request);
+    const store = readWorkspaceBridgeStore();
+    store[key] = {
+      updatedAt: new Date().toISOString(),
+      payload,
+    };
+    writeWorkspaceBridgeStore(store);
+    writeJson(response, 200, store[key]);
+    return;
+  }
+
+  writeJson(response, 405, { error: 'Unsupported method.' });
+}
+
+function readWorkspaceBridgeStore(): Record<string, unknown> {
+  try {
+    return JSON.parse(readFileSync(WORKSPACE_BRIDGE_PATH, 'utf8')) as Record<string, unknown>;
+  } catch {
+    return {};
+  }
+}
+
+function writeWorkspaceBridgeStore(store: Record<string, unknown>): void {
+  mkdirSync(dirname(WORKSPACE_BRIDGE_PATH), { recursive: true });
+  writeAtomically(WORKSPACE_BRIDGE_PATH, store);
+}
+
+async function readJsonBody(request: IncomingMessage): Promise<unknown> {
+  const chunks: Buffer[] = [];
+  for await (const chunk of request) {
+    chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+  }
+  if (chunks.length === 0) return null;
+  return JSON.parse(Buffer.concat(chunks).toString('utf8'));
+}
+
+function writeJson(response: ServerResponse, status: number, value: unknown): void {
+  response.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8' });
+  response.end(JSON.stringify(value));
+}
+
 export function buildStyleInjectionExpression(css: string): string {
+  const workspaceSource = splitWorkspaceSource(css);
   const hash = createHash('sha256').update(css).digest('hex');
-  const safeCss = JSON.stringify(css);
+  const safeCss = JSON.stringify(workspaceSource.css);
   const safeHash = JSON.stringify(hash);
   const safeId = JSON.stringify(STYLE_ELEMENT_ID);
+  const safeScript = JSON.stringify(workspaceSource.script);
 
   return `(() => {
   const id = ${safeId};
   const hash = ${safeHash};
   const css = ${safeCss};
+  const script = ${safeScript};
   const current = document.getElementById(id);
+  let status = 'current';
   if (!css) {
     current?.remove();
-    return 'removed';
+    status = 'removed';
+  } else if (current?.dataset.attuneHash !== hash) {
+    const style = current || document.createElement('style');
+    style.id = id;
+    style.dataset.attuneHash = hash;
+    style.textContent = css;
+    if (!current) document.head.append(style);
+    status = 'applied';
   }
-  if (current?.dataset.attuneHash === hash) return 'current';
-  const style = current || document.createElement('style');
-  style.id = id;
-  style.dataset.attuneHash = hash;
-  style.textContent = css;
-  if (!current) document.head.append(style);
-  return 'applied';
+  if (script) {
+    try {
+      (0, eval)(script);
+    } catch (error) {
+      console.warn('[attune] workspace script failed', error);
+    }
+  }
+  return status;
 })()`;
+}
+
+export function splitWorkspaceSource(source: string): { css: string; script: string } {
+  const scripts: string[] = [];
+  const css = source.replace(WORKSPACE_SCRIPT_RE, (_match, script: string) => {
+    scripts.push(script.trim());
+    return '';
+  }).trim();
+
+  return {
+    css,
+    script: scripts.join('\n;\n'),
+  };
 }
 
 async function getDebugTargets(port: number): Promise<DebugTarget[]> {
