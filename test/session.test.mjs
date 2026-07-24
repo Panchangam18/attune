@@ -6,7 +6,56 @@ import test from 'node:test';
 import vm from 'node:vm';
 import { readStylesheet } from '../dist/config.js';
 import { getChromiumRuntime } from '../dist/scan.js';
-import { buildStyleInjectionExpression, splitWorkspaceSource } from '../dist/session.js';
+import { buildInspectionExpression, buildStyleInjectionExpression, compactInspection, splitWorkspaceSource } from '../dist/session.js';
+
+test('inspection expression is valid JavaScript and requests agent-relevant context', () => {
+  const expression = buildInspectionExpression();
+  assert.doesNotThrow(() => new vm.Script(expression));
+  assert.match(expression, /Page|viewport|elements/);
+  assert.match(expression, /data-testid/);
+  assert.match(expression, /attuneStylePresent/);
+});
+
+test('compact inspection bounds immediate agent context', () => {
+  const elements = Array.from({ length: 40 }, (_, index) => ({
+    selector: `[data-testid="item-${index}"]`,
+    stability: 'high',
+    tag: 'button',
+    role: 'button',
+    label: `Item ${index}`,
+    text: `Visible item ${index}`,
+    bounds: { x: index, y: index, width: 100, height: 30 },
+    styles: {
+      display: 'block',
+      position: 'static',
+      color: 'rgb(0, 0, 0)',
+      backgroundColor: 'rgb(255, 255, 255)',
+      fontSize: '14px',
+    },
+  }));
+  const result = compactInspection({
+    appId: 'com.example.app',
+    appName: 'Example',
+    capturedAt: '2026-07-24T00:00:00.000Z',
+    inspectionPath: '/tmp/attune-inspect-test/inspection.json',
+    ephemeral: true,
+    expiresAt: '2026-07-25T00:00:00.000Z',
+    session: { status: 'attached', port: 12345, targetCount: 1 },
+    pages: [{
+      title: 'Example',
+      url: 'app://example',
+      viewport: { width: 1280, height: 800, deviceScaleFactor: 2 },
+      screenshotPath: '/tmp/attune-inspect-test/page.png',
+      attuneStylePresent: true,
+      elements,
+    }],
+  });
+
+  assert.equal(result.primaryPage.selectorSample.length, 24);
+  assert.equal(result.primaryPage.elementCount, 40);
+  assert.equal('styles' in result.primaryPage.selectorSample[0], false);
+  assert.equal(result.artifacts.ephemeral, true);
+});
 
 test('style injection expression serializes and manages stylesheet text safely', () => {
   const css = "html::before { content: 'quoted \\ value'; }";

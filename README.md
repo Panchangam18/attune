@@ -10,7 +10,8 @@ verify the visual result, and keep the CSS editable after launch.
 
 - Terminal access to run the Attune CLI.
 - Permission to close and relaunch the target app after asking the user.
-- Optional desktop or screenshot access to verify the rendered result.
+- Access to the local Attune session; `attune inspect` supplies screenshots and
+  selector context directly to the agent.
 
 ## Install The Runtime
 
@@ -30,12 +31,22 @@ node dist/cli.js set-css "Spotify" ./examples/spotify-vinyl-archive.css
 # Quit Spotify normally, after confirming the user is ready.
 node dist/cli.js launch "Spotify"
 node dist/cli.js status "Spotify"
+node dist/cli.js inspect "Spotify"
 ```
 
 `launch` starts the ordinary app executable with a localhost-only DevTools port.
 The Attune sidecar discovers its renderer windows and manages one stylesheet in
 each. Saving the source CSS file applies edits live; the app bundle, ASAR files,
 and code signature remain unchanged.
+
+`inspect` prints a compact machine-readable summary and saves screenshots plus
+complete selector details in a temporary inspection directory. Temporary
+artifacts expire after 24 hours and are removed by a later inspection. Pass
+`--full` to print the complete JSON, or `--output <directory>` to retain the
+artifacts explicitly. The context includes viewport data, visible controls and
+landmarks, selector stability, bounds, and computed-style samples. Because
+visible labels and text may appear in the JSON and screenshots, inspection
+output should be treated as private user data.
 
 ## Included Styles
 

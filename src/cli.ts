@@ -4,7 +4,7 @@ import { existsSync, readFileSync } from 'fs';
 import { resolve } from 'path';
 import { setStylesheetSource } from './config.js';
 import { scanForSupportedApps, findApp, getAppId } from './scan.js';
-import { attach, getSession, launch, runWatcher, stopSession } from './session.js';
+import { attach, compactInspection, getSession, inspect, launch, runWatcher, stopSession } from './session.js';
 
 const [, , command, ...args] = process.argv;
 void main(command, args);
@@ -28,6 +28,9 @@ async function main(command: string | undefined, args: string[]) {
       break;
     case 'status':
       cmdStatus(args[0]);
+      break;
+    case 'inspect':
+      await cmdInspect(args);
       break;
     case '_watch':
       await cmdWatch(args[0], args[1], args[2]);
@@ -163,6 +166,35 @@ function cmdStatus(query: string | undefined) {
   console.log(`Attune for "${app.name}": ${session.status} (${session.targetCount} page ${targetLabel})`);
 }
 
+async function cmdInspect(args: string[]) {
+  const query = args[0];
+  if (!query) {
+    console.error('Usage: attune inspect <app-name> [--full] [--output <directory>]');
+    process.exit(1);
+  }
+
+  const outputIndex = args.indexOf('--output');
+  const outputDirectory = outputIndex >= 0 ? args[outputIndex + 1] : undefined;
+  if (outputIndex >= 0 && !outputDirectory) {
+    console.error('Usage: attune inspect <app-name> [--full] [--output <directory>]');
+    process.exit(1);
+  }
+
+  const app = findApp(scanForSupportedApps(), query);
+  if (!app) {
+    console.error(`No supported Chromium app found matching "${query}".`);
+    process.exit(1);
+  }
+
+  try {
+    const result = await inspect(app, outputDirectory ? resolve(outputDirectory) : undefined);
+    console.log(JSON.stringify(args.includes('--full') ? result : compactInspection(result), null, 2));
+  } catch (error: unknown) {
+    console.error(`Failed to inspect "${app.name}":`, (error as Error).message);
+    process.exit(1);
+  }
+}
+
 async function cmdWatch(configPath: string | undefined, rawPort: string | undefined, sessionPath: string | undefined) {
   const port = Number(rawPort);
   if (!configPath || !sessionPath || !Number.isInteger(port) || port <= 0 || port > 65535) {
@@ -182,6 +214,9 @@ Usage:
   attune launch <app-name>           Launch without modifying the app bundle
   attune attach <app-name> <port>    Attach to an app already running with DevTools
   attune status <app-name>           Show an Attune session
+  attune inspect <app-name>          Return compact context; artifacts expire after 24 hours
+    --full                           Print the complete inspection JSON
+    --output <directory>             Keep inspection artifacts in a chosen directory
   attune stop <app-name>             Stop applying styles to a session
 `);
 }

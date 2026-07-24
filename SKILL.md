@@ -25,25 +25,41 @@ Use Attune to apply CSS to Chromium renderers without modifying the target app's
    npm run build
    ```
 
-3. Create or update a named CSS file. Start with the target's color tokens and stable semantic selectors; add structural selectors only after inspecting the rendered UI.
-4. If the app is running, obtain consent and quit it normally. Do not bypass save prompts.
-5. Register and launch the style:
+3. If the app is running, obtain consent and quit it normally. Do not bypass save prompts.
+4. Launch the app, wait for `status` to report `attached`, then inspect the live renderer:
+
+   ```sh
+   attune launch "App Name"
+   attune status "App Name"
+   attune inspect "App Name"
+   ```
+
+   `inspect` returns compact JSON containing the primary screenshot, viewport,
+   and a small selector sample. Complete context is saved at the returned
+   temporary JSON path and expires after 24 hours. Read only the targeted
+   details needed for the edit. Use `--full` only when compact context is
+   insufficient, or `--output <directory>` when artifacts must be retained.
+   Inspection may include text visible in the app; treat it as private user data.
+5. Create or update a named CSS file from the inspection. Prefer high-stability
+   semantic selectors; use structural selectors only when necessary.
+6. Register the stylesheet:
 
    ```sh
    attune set-css "App Name" /absolute/path/to/style.css
-   attune launch "App Name"
    ```
 
    When running from this repository, use `node dist/cli.js` in place of `attune`.
-6. Wait until `attune status "App Name"` reports `attached`. Verify the result in the actual window; when desktop screenshot tools are available, capture a before/after image.
-7. Iterate by editing the same CSS file. Attune polls the local stylesheet and reinjects it into each page renderer without restarting the app.
+7. Run `inspect` again after each significant edit and compare the new
+   screenshot with the intended result. Attune polls the source CSS and
+   reinjects it without restarting the app.
 
 ## Styling Guidance
 
 - Prefer CSS variables and class or data selectors owned by the target app.
 - Use `!important` sparingly but deliberately for application theme tokens that override inline or high-specificity rules.
 - Give every style a clear name and keep it in a durable user-controlled location rather than a temporary file.
-- Inspect the UI after each significant change. Chromium app DOM structures change across releases, so treat selectors as app-version-specific.
+- Inspect the UI before styling and after each significant change. Chromium app
+  DOM structures change across releases, so treat selectors as app-version-specific.
 
 ## Verify and Undo
 

@@ -1,7 +1,7 @@
 import { execFileSync, spawn } from 'child_process';
 import { createHash } from 'crypto';
-import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'fs';
-import { homedir } from 'os';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, renameSync, rmSync, statSync, writeFileSync } from 'fs';
+import { homedir, tmpdir } from 'os';
 import { dirname, join } from 'path';
 import { createServer } from 'net';
 import { createServer as createHttpServer, type IncomingMessage, type ServerResponse } from 'http';
@@ -16,9 +16,13 @@ const STYLE_ELEMENT_ID = 'attune-custom-stylesheet';
 const WORKSPACE_SCRIPT_RE = /\/\*\s*@attune-script\s*\n([\s\S]*?)\n\s*@end-attune-script\s*\*\//g;
 const POLL_INTERVAL_MS = 500;
 const MAX_MISSED_POLLS = 120;
+const INSPECTION_TTL_MS = 24 * 60 * 60 * 1000;
+const INSPECTION_TEMP_PREFIX = 'attune-inspect-';
 
 interface DebugTarget {
   type: string;
+  title?: string;
+  url?: string;
   webSocketDebuggerUrl?: string;
 }
 
@@ -31,6 +35,43 @@ export interface SessionRecord {
   targetCount: number;
   updatedAt: string;
   watcherPid: number;
+}
+
+export interface InspectionElement {
+  selector: string;
+  stability: 'high' | 'medium' | 'low';
+  tag: string;
+  role: string | null;
+  label: string;
+  text: string;
+  bounds: { x: number; y: number; width: number; height: number };
+  styles: {
+    display: string;
+    position: string;
+    color: string;
+    backgroundColor: string;
+    fontSize: string;
+  };
+}
+
+export interface PageInspection {
+  title: string;
+  url: string;
+  viewport: { width: number; height: number; deviceScaleFactor: number };
+  screenshotPath: string;
+  attuneStylePresent: boolean;
+  elements: InspectionElement[];
+}
+
+export interface AppInspection {
+  appId: string;
+  appName: string;
+  capturedAt: string;
+  inspectionPath: string;
+  ephemeral: boolean;
+  expiresAt: string | null;
+  session: Pick<SessionRecord, 'status' | 'port' | 'targetCount'>;
+  pages: PageInspection[];
 }
 
 export async function launch(app: DiscoveredApp, cliPath: string): Promise<{ port: number }> {
@@ -125,6 +166,156 @@ export function stopSession(appId: string): boolean {
 
 export function getSession(appId: string): SessionRecord | null {
   return readSession(getSessionPath(appId));
+}
+
+/**
+ * Give an agent a bounded view of the live renderer: a screenshot, viewport,
+ * and visible selector candidates. This is intentionally not a full DOM dump.
+ */
+export async function inspect(
+  app: DiscoveredApp,
+  outputDirectory?: string,
+): Promise<AppInspection> {
+  const appId = getAppId(app);
+  const session = getSession(appId);
+  if (!session) {
+    throw new Error(`No Attune session is running for "${app.name}". Launch or attach it first.`);
+  }
+  if (session.status !== 'attached') {
+    throw new Error(`Attune for "${app.name}" is ${session.status}; wait for status "attached" and try again.`);
+  }
+
+  const targets = (await getDebugTargets(session.port))
+    .filter(target => target.type === 'page' && target.webSocketDebuggerUrl);
+  if (targets.length === 0) {
+    throw new Error(`No inspectable page targets are available for "${app.name}".`);
+  }
+
+  cleanupExpiredInspections();
+  const ephemeral = !outputDirectory;
+  const resolvedOutputDirectory = outputDirectory ?? mkdtempSync(join(tmpdir(), INSPECTION_TEMP_PREFIX));
+  mkdirSync(resolvedOutputDirectory, { recursive: true });
+  const capturedAt = new Date().toISOString();
+  const prefix = `${slugify(app.name)}-${capturedAt.replace(/[:.]/g, '-')}`;
+  const pages: PageInspection[] = [];
+
+  for (const [index, target] of targets.entries()) {
+    const webSocketUrl = target.webSocketDebuggerUrl!;
+    const evaluated = await sendDevToolsCommand<{
+      result?: { value?: Omit<PageInspection, 'screenshotPath'> };
+      exceptionDetails?: unknown;
+    }>(webSocketUrl, 'Runtime.evaluate', {
+      expression: buildInspectionExpression(),
+      returnByValue: true,
+    });
+    if (evaluated.exceptionDetails || !evaluated.result?.value) continue;
+
+    const screenshot = await sendDevToolsCommand<{ data?: string }>(
+      webSocketUrl,
+      'Page.captureScreenshot',
+      { format: 'png', fromSurface: true },
+    );
+    if (!screenshot.data) continue;
+
+    const screenshotPath = join(resolvedOutputDirectory, `${prefix}-page-${index + 1}.png`);
+    writeFileSync(screenshotPath, Buffer.from(screenshot.data, 'base64'));
+    pages.push({
+      ...evaluated.result.value,
+      title: evaluated.result.value.title || target.title || '',
+      url: evaluated.result.value.url || target.url || '',
+      screenshotPath,
+    });
+  }
+
+  if (pages.length === 0) {
+    throw new Error(`Attune could not capture an inspectable page for "${app.name}".`);
+  }
+
+  const inspectionPath = join(resolvedOutputDirectory, 'inspection.json');
+  const result: AppInspection = {
+    appId,
+    appName: app.name,
+    capturedAt,
+    inspectionPath,
+    ephemeral,
+    expiresAt: ephemeral ? new Date(Date.now() + INSPECTION_TTL_MS).toISOString() : null,
+    session: {
+      status: session.status,
+      port: session.port,
+      targetCount: session.targetCount,
+    },
+    pages,
+  };
+  writeFileSync(inspectionPath, JSON.stringify(result, null, 2));
+  return result;
+}
+
+export function compactInspection(inspection: AppInspection) {
+  const primaryPage = [...inspection.pages].sort((left, right) => right.elements.length - left.elements.length)[0];
+  const compactElements = primaryPage.elements
+    .filter(element => element.stability !== 'low' || element.label || element.text)
+    .slice(0, 24)
+    .map(({ selector, stability, tag, role, label, text, bounds }) => ({
+      selector,
+      stability,
+      tag,
+      role,
+      label: label.slice(0, 80),
+      text: text.slice(0, 80),
+      bounds,
+    }));
+  return {
+    appId: inspection.appId,
+    appName: inspection.appName,
+    capturedAt: inspection.capturedAt,
+    session: inspection.session,
+    artifacts: {
+      fullInspectionPath: inspection.inspectionPath,
+      ephemeral: inspection.ephemeral,
+      expiresAt: inspection.expiresAt,
+      retention: inspection.ephemeral
+        ? 'Temporary; automatically removed by a later inspection after expiry.'
+        : 'Persistent because --output was supplied.',
+    },
+    pageCount: inspection.pages.length,
+    primaryPage: {
+      title: primaryPage.title,
+      url: primaryPage.url,
+      viewport: primaryPage.viewport,
+      screenshotPath: primaryPage.screenshotPath,
+      attuneStylePresent: primaryPage.attuneStylePresent,
+      elementCount: primaryPage.elements.length,
+      selectorSample: compactElements,
+    },
+    otherPages: inspection.pages
+      .filter(page => page !== primaryPage)
+      .map(page => ({
+        title: page.title,
+        url: page.url,
+        viewport: page.viewport,
+        screenshotPath: page.screenshotPath,
+        elementCount: page.elements.length,
+      })),
+  };
+}
+
+function cleanupExpiredInspections(): void {
+  const cutoff = Date.now() - INSPECTION_TTL_MS;
+  let entries;
+  try {
+    entries = readdirSync(tmpdir(), { withFileTypes: true });
+  } catch {
+    return;
+  }
+  for (const entry of entries) {
+    if (!entry.isDirectory() || !entry.name.startsWith(INSPECTION_TEMP_PREFIX)) continue;
+    const candidate = join(tmpdir(), entry.name);
+    try {
+      if (statSync(candidate).mtimeMs < cutoff) rmSync(candidate, { recursive: true, force: true });
+    } catch {
+      // A concurrent cleanup or OS temp cleanup is harmless.
+    }
+  }
 }
 
 export async function runWatcher(configPath: string, port: number, sessionPath: string): Promise<void> {
@@ -319,6 +510,121 @@ export function splitWorkspaceSource(source: string): { css: string; script: str
   };
 }
 
+export function buildInspectionExpression(): string {
+  return `(() => {
+  const clean = (value, length = 140) =>
+    String(value || '').replace(/\\s+/g, ' ').trim().slice(0, length);
+  const quote = value => JSON.stringify(String(value));
+  const visible = element => {
+    const style = getComputedStyle(element);
+    const bounds = element.getBoundingClientRect();
+    return style.display !== 'none'
+      && style.visibility !== 'hidden'
+      && Number(style.opacity || 1) > 0
+      && bounds.width > 0
+      && bounds.height > 0
+      && bounds.bottom >= 0
+      && bounds.right >= 0
+      && bounds.top <= innerHeight
+      && bounds.left <= innerWidth;
+  };
+  const unique = selector => {
+    try {
+      return document.querySelectorAll(selector).length === 1;
+    } catch {
+      return false;
+    }
+  };
+  const semanticSelector = element => {
+    if (element.id) {
+      const selector = '#' + CSS.escape(element.id);
+      if (unique(selector)) return { selector, stability: 'high' };
+    }
+    for (const attribute of ['data-testid', 'data-test-id', 'data-qa', 'aria-label', 'name']) {
+      const value = element.getAttribute(attribute);
+      if (!value) continue;
+      const selector = '[' + attribute + '=' + quote(value) + ']';
+      if (unique(selector)) return { selector, stability: 'high' };
+    }
+    const role = element.getAttribute('role');
+    if (role) {
+      const selector = '[role=' + quote(role) + ']';
+      if (unique(selector)) return { selector, stability: 'medium' };
+    }
+    return null;
+  };
+  const structuralSelector = element => {
+    const segments = [];
+    let current = element;
+    while (current && current !== document.documentElement && segments.length < 5) {
+      const semantic = semanticSelector(current);
+      if (semantic) {
+        segments.unshift(semantic.selector);
+        return { selector: segments.join(' > '), stability: segments.length === 1 ? semantic.stability : 'medium' };
+      }
+      let segment = current.tagName.toLowerCase();
+      const classes = [...current.classList]
+        .filter(name => name.length < 40 && !/[a-f0-9]{8,}/i.test(name))
+        .slice(0, 2);
+      if (classes.length) segment += '.' + classes.map(name => CSS.escape(name)).join('.');
+      const siblings = current.parentElement
+        ? [...current.parentElement.children].filter(sibling => sibling.tagName === current.tagName)
+        : [];
+      if (siblings.length > 1) segment += ':nth-of-type(' + (siblings.indexOf(current) + 1) + ')';
+      segments.unshift(segment);
+      const candidate = segments.join(' > ');
+      if (unique(candidate)) return { selector: candidate, stability: classes.length ? 'medium' : 'low' };
+      current = current.parentElement;
+    }
+    return { selector: segments.join(' > '), stability: 'low' };
+  };
+  const seen = new Set();
+  const elements = [...document.querySelectorAll(
+    'button, [role="button"], input, textarea, select, a, [aria-label], [data-testid], [data-test-id], [data-qa], h1, h2, h3, nav, aside, header, main'
+  )]
+    .filter(visible)
+    .map(element => {
+      const candidate = semanticSelector(element) || structuralSelector(element);
+      const bounds = element.getBoundingClientRect();
+      const style = getComputedStyle(element);
+      return {
+        selector: candidate.selector,
+        stability: candidate.stability,
+        tag: element.tagName.toLowerCase(),
+        role: element.getAttribute('role'),
+        label: clean(element.getAttribute('aria-label')),
+        text: clean(element.innerText || element.textContent),
+        bounds: {
+          x: Math.round(bounds.x),
+          y: Math.round(bounds.y),
+          width: Math.round(bounds.width),
+          height: Math.round(bounds.height),
+        },
+        styles: {
+          display: style.display,
+          position: style.position,
+          color: style.color,
+          backgroundColor: style.backgroundColor,
+          fontSize: style.fontSize,
+        },
+      };
+    })
+    .filter(item => item.selector && !seen.has(item.selector) && (seen.add(item.selector), true))
+    .slice(0, 160);
+  return {
+    title: document.title,
+    url: location.href,
+    viewport: {
+      width: innerWidth,
+      height: innerHeight,
+      deviceScaleFactor: devicePixelRatio,
+    },
+    attuneStylePresent: Boolean(document.getElementById(${JSON.stringify(STYLE_ELEMENT_ID)})),
+    elements,
+  };
+})()`;
+}
+
 async function getDebugTargets(port: number): Promise<DebugTarget[]> {
   const response = await fetch(`http://127.0.0.1:${port}/json/list`, {
     signal: AbortSignal.timeout(1000),
@@ -327,6 +633,50 @@ async function getDebugTargets(port: number): Promise<DebugTarget[]> {
     throw new Error(`DevTools endpoint returned ${response.status}`);
   }
   return response.json() as Promise<DebugTarget[]>;
+}
+
+async function sendDevToolsCommand<T>(
+  webSocketUrl: string,
+  method: string,
+  params: Record<string, unknown>,
+): Promise<T> {
+  const socket = new WebSocket(webSocketUrl);
+  await new Promise<void>((resolve, reject) => {
+    const timeout = setTimeout(() => reject(new Error('DevTools connection timed out')), 3000);
+    socket.addEventListener('open', () => {
+      clearTimeout(timeout);
+      resolve();
+    }, { once: true });
+    socket.addEventListener('error', () => {
+      clearTimeout(timeout);
+      reject(new Error('DevTools connection failed'));
+    }, { once: true });
+  });
+
+  try {
+    return await new Promise<T>((resolve, reject) => {
+      const timeout = setTimeout(() => reject(new Error(`${method} timed out`)), 5000);
+      socket.addEventListener('message', event => {
+        const message = JSON.parse(String(event.data)) as { id?: number; result?: T; error?: { message?: string } };
+        if (message.id !== 1) return;
+        clearTimeout(timeout);
+        if (message.error) {
+          reject(new Error(message.error.message || `DevTools rejected ${method}`));
+          return;
+        }
+        resolve(message.result as T);
+      });
+      socket.send(JSON.stringify({ id: 1, method, params }));
+    });
+  } finally {
+    socket.close();
+  }
+}
+
+function slugify(value: string): string {
+  return value.toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-|-$/g, '') || 'app';
 }
 
 async function injectStylesheet(webSocketUrl: string, css: string): Promise<void> {
