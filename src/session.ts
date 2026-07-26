@@ -5,6 +5,7 @@ import { homedir, tmpdir } from 'os';
 import { dirname, join } from 'path';
 import { createServer } from 'net';
 import { createServer as createHttpServer, type IncomingMessage, type ServerResponse } from 'http';
+import { createCodexTaskFromChatGpt, type ChatGptCodexTransfer } from './codex-chatgpt.js';
 import { ensureConfig, readStylesheet } from './config.js';
 import { type DiscoveredApp, getAppExecutablePath, getAppId } from './scan.js';
 
@@ -94,10 +95,15 @@ export async function launch(app: DiscoveredApp, cliPath: string): Promise<{ por
   });
   watcher.unref();
 
+  const chromeProfilePath = app.runtime === 'chrome'
+    ? join(ATTUNE_DIR, 'chrome-profiles', appId)
+    : null;
+  if (chromeProfilePath) mkdirSync(chromeProfilePath, { recursive: true });
   const appProcess = spawn(executablePath, [
     '--remote-debugging-address=127.0.0.1',
     `--remote-debugging-port=${port}`,
     '--remote-allow-origins=http://localhost',
+    ...(chromeProfilePath ? [`--user-data-dir=${chromeProfilePath}`, '--no-first-run', '--no-default-browser-check'] : []),
   ], {
     cwd: dirname(executablePath),
     detached: true,
@@ -321,10 +327,11 @@ function cleanupExpiredInspections(): void {
 export async function runWatcher(configPath: string, port: number, sessionPath: string): Promise<void> {
   let stopped = false;
   let missedPolls = 0;
-  startWorkspaceBridgeServer();
+  const stopWorkspaceBridgeServer = startWorkspaceBridgeServer();
 
   const stop = () => {
     stopped = true;
+    stopWorkspaceBridgeServer();
   };
   process.once('SIGINT', stop);
   process.once('SIGTERM', stop);
@@ -335,7 +342,8 @@ export async function runWatcher(configPath: string, port: number, sessionPath: 
       const stylesheet = readStylesheet(configPath);
       const pageTargets = targets.filter(target => target.type === 'page' && target.webSocketDebuggerUrl);
 
-      await Promise.all(pageTargets.map(target => injectStylesheet(target.webSocketDebuggerUrl!, stylesheet)));
+      const workspaceBridge = readWorkspaceBridgeStore();
+      await Promise.all(pageTargets.map(target => injectStylesheet(target.webSocketDebuggerUrl!, stylesheet, workspaceBridge)));
       missedPolls = 0;
       updateSession(sessionPath, {
         status: 'attached',
@@ -360,15 +368,32 @@ export async function runWatcher(configPath: string, port: number, sessionPath: 
   }
 }
 
-function startWorkspaceBridgeServer(): void {
+function startWorkspaceBridgeServer(): () => void {
+  let stopped = false;
+  let retryTimer: ReturnType<typeof setTimeout> | undefined;
   const server = createHttpServer((request, response) => {
     void handleWorkspaceBridgeRequest(request, response);
   });
   server.on('error', error => {
-    if ('code' in error && error.code === 'EADDRINUSE') return;
+    if ('code' in error && error.code === 'EADDRINUSE') {
+      if (!stopped && !retryTimer) {
+        retryTimer = setTimeout(() => {
+          retryTimer = undefined;
+          if (!stopped) server.listen(WORKSPACE_BRIDGE_PORT, '127.0.0.1');
+        }, 1000);
+        retryTimer.unref();
+      }
+      return;
+    }
     console.warn('[attune] workspace bridge unavailable', error);
   });
   server.listen(WORKSPACE_BRIDGE_PORT, '127.0.0.1');
+  server.unref();
+  return () => {
+    stopped = true;
+    if (retryTimer) clearTimeout(retryTimer);
+    if (server.listening) server.close();
+  };
 }
 
 async function handleWorkspaceBridgeRequest(request: IncomingMessage, response: ServerResponse): Promise<void> {
@@ -396,14 +421,38 @@ async function handleWorkspaceBridgeRequest(request: IncomingMessage, response: 
   }
 
   if (request.method === 'POST') {
-    const payload = await readJsonBody(request);
-    const store = readWorkspaceBridgeStore();
-    store[key] = {
-      updatedAt: new Date().toISOString(),
-      payload,
-    };
-    writeWorkspaceBridgeStore(store);
-    writeJson(response, 200, store[key]);
+    const isFormHandoff = request.headers['content-type']?.includes('application/x-www-form-urlencoded') ?? false;
+    try {
+      const payload = await readRequestBody(request);
+      if (key === 'chatgpt-to-codex') {
+        const task = createCodexTaskFromChatGpt((payload || {}) as ChatGptCodexTransfer);
+        const store = readWorkspaceBridgeStore();
+        delete store[key];
+        writeWorkspaceBridgeStore(store);
+        if (isFormHandoff) {
+          writeHandoffPage(response, 200, 'Opening Codex', `Opening “${task.title}”…`, true);
+          scheduleCodexTaskOpen(task.threadId);
+        } else {
+          writeJson(response, 200, task);
+        }
+        return;
+      }
+
+      const store = readWorkspaceBridgeStore();
+      store[key] = {
+        updatedAt: new Date().toISOString(),
+        payload,
+      };
+      writeWorkspaceBridgeStore(store);
+      writeJson(response, 200, store[key]);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Attune could not process this request.';
+      if (isFormHandoff) {
+        writeHandoffPage(response, 400, 'Could not send to Codex', message, false);
+      } else {
+        writeJson(response, 400, { error: message });
+      }
+    }
     return;
   }
 
@@ -423,13 +472,23 @@ function writeWorkspaceBridgeStore(store: Record<string, unknown>): void {
   writeAtomically(WORKSPACE_BRIDGE_PATH, store);
 }
 
-async function readJsonBody(request: IncomingMessage): Promise<unknown> {
+async function readRequestBody(request: IncomingMessage): Promise<unknown> {
   const chunks: Buffer[] = [];
+  let size = 0;
   for await (const chunk of request) {
-    chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+    const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+    size += buffer.length;
+    if (size > 10 * 1024 * 1024) throw new Error('The ChatGPT conversation is too large to import.');
+    chunks.push(buffer);
   }
   if (chunks.length === 0) return null;
-  return JSON.parse(Buffer.concat(chunks).toString('utf8'));
+  const body = Buffer.concat(chunks).toString('utf8');
+  if (request.headers['content-type']?.includes('application/x-www-form-urlencoded')) {
+    const payload = new URLSearchParams(body).get('payload');
+    if (!payload) throw new Error('The Safari handoff did not include a conversation.');
+    return JSON.parse(payload);
+  }
+  return JSON.parse(body);
 }
 
 function writeJson(response: ServerResponse, status: number, value: unknown): void {
@@ -437,19 +496,69 @@ function writeJson(response: ServerResponse, status: number, value: unknown): vo
   response.end(JSON.stringify(value));
 }
 
-export function buildStyleInjectionExpression(css: string): string {
+function writeHandoffPage(
+  response: ServerResponse,
+  status: number,
+  title: string,
+  message: string,
+  closeAutomatically: boolean,
+): void {
+  const escapeHtml = (value: string) => value.replace(/[&<>"']/g, character => ({
+    '&': '&amp;',
+    '<': '&lt;',
+    '>': '&gt;',
+    '"': '&quot;',
+    "'": '&#39;',
+  })[character] || character);
+  response.writeHead(status, {
+    'Content-Type': 'text/html; charset=utf-8',
+    'Content-Security-Policy': "default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'",
+  });
+  response.end(`<!doctype html>
+<meta charset="utf-8">
+<title>${escapeHtml(title)}</title>
+<style>html{color-scheme:dark}body{display:grid;min-height:100vh;margin:0;place-items:center;background:#171717;color:#f5f5f5;font:14px/1.45 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}.card{max-width:360px;padding:24px;border:1px solid #3c3c3c;border-radius:14px;background:#242424;box-shadow:0 18px 60px #0008}h1{margin:0 0 8px;font-size:18px}p{margin:0;color:#b7b7b7}</style>
+<main class="card"><h1>${escapeHtml(title)}</h1><p>${escapeHtml(message)}</p></main>
+${closeAutomatically
+    ? '<script>window.close()</script>'
+    : '<script>window.resizeTo(440,240);window.moveTo(Math.max(0,(screen.availWidth-440)/2),Math.max(0,(screen.availHeight-240)/2));window.focus()</script>'}`);
+}
+
+function scheduleCodexTaskOpen(threadId: string): void {
+  if (process.platform !== 'darwin') return;
+
+  // Let Safari close the form-post popup before switching applications. If
+  // Codex opens first, closing that popup can pull focus back to Safari.
+  const timer = setTimeout(() => {
+    try {
+      const opener = spawn(
+        '/usr/bin/open',
+        ['-b', 'com.openai.codex', `codex://threads/${encodeURIComponent(threadId)}`],
+        { detached: true, stdio: 'ignore' },
+      );
+      opener.unref();
+    } catch (error) {
+      console.warn('[attune] could not open the imported Codex task', error);
+    }
+  }, 350);
+  timer.unref();
+}
+
+export function buildStyleInjectionExpression(css: string, workspaceBridge: Record<string, unknown> = {}): string {
   const workspaceSource = splitWorkspaceSource(css);
   const hash = createHash('sha256').update(css).digest('hex');
   const safeCss = JSON.stringify(workspaceSource.css);
   const safeHash = JSON.stringify(hash);
   const safeId = JSON.stringify(STYLE_ELEMENT_ID);
   const safeScript = JSON.stringify(workspaceSource.script);
+  const safeWorkspaceBridge = JSON.stringify(workspaceBridge);
 
   return `(() => {
   const id = ${safeId};
   const hash = ${safeHash};
   const css = ${safeCss};
   const script = ${safeScript};
+  window.__attuneWorkspaceBridge = ${safeWorkspaceBridge};
   const cleanupKey = '__attuneWorkspaceScriptCleanup';
   const scriptHashKey = '__attuneWorkspaceScriptHash';
   const current = document.getElementById(id);
@@ -679,7 +788,11 @@ function slugify(value: string): string {
     .replace(/^-|-$/g, '') || 'app';
 }
 
-async function injectStylesheet(webSocketUrl: string, css: string): Promise<void> {
+async function injectStylesheet(
+  webSocketUrl: string,
+  css: string,
+  workspaceBridge: Record<string, unknown>,
+): Promise<void> {
   const socket = new WebSocket(webSocketUrl);
   await new Promise<void>((resolve, reject) => {
     const timeout = setTimeout(() => reject(new Error('DevTools connection timed out')), 3000);
@@ -698,7 +811,23 @@ async function injectStylesheet(webSocketUrl: string, css: string): Promise<void
       const timeout = setTimeout(() => reject(new Error('Style injection timed out')), 3000);
       socket.addEventListener('message', event => {
         const message = JSON.parse(String(event.data)) as { id?: number; error?: unknown };
-        if (message.id !== 1) return;
+        if (message.id === 1) {
+          if (message.error) {
+            clearTimeout(timeout);
+            reject(new Error('DevTools rejected CSP bypass'));
+            return;
+          }
+          socket.send(JSON.stringify({
+            id: 2,
+            method: 'Runtime.evaluate',
+            params: {
+              expression: buildStyleInjectionExpression(css, workspaceBridge),
+              returnByValue: true,
+            },
+          }));
+          return;
+        }
+        if (message.id !== 2) return;
         clearTimeout(timeout);
         if (message.error) {
           reject(new Error('DevTools rejected style injection'));
@@ -708,10 +837,9 @@ async function injectStylesheet(webSocketUrl: string, css: string): Promise<void
       });
       socket.send(JSON.stringify({
         id: 1,
-        method: 'Runtime.evaluate',
+        method: 'Page.setBypassCSP',
         params: {
-          expression: buildStyleInjectionExpression(css),
-          returnByValue: true,
+          enabled: true,
         },
       }));
     });

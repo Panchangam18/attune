@@ -3,7 +3,7 @@ import { existsSync, readdirSync } from 'fs';
 import { join } from 'path';
 import { homedir } from 'os';
 
-export type ChromiumRuntime = 'electron' | 'cef';
+export type ChromiumRuntime = 'electron' | 'cef' | 'chrome';
 
 export interface DiscoveredApp {
   name: string;
@@ -56,6 +56,9 @@ export function getChromiumRuntime(appPath: string): ChromiumRuntime | null {
   }
   if (existsSync(join(frameworksPath, 'Codex Framework.framework'))) {
     return 'cef';
+  }
+  if (existsSync(join(frameworksPath, 'Google Chrome Framework.framework'))) {
+    return 'chrome';
   }
   return null;
 }
