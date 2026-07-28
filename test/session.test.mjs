@@ -6,7 +6,33 @@ import test from 'node:test';
 import vm from 'node:vm';
 import { readStylesheet } from '../dist/config.js';
 import { getChromiumRuntime } from '../dist/scan.js';
-import { buildInspectionExpression, buildStyleInjectionExpression, compactInspection, splitWorkspaceSource } from '../dist/session.js';
+import {
+  buildInspectionExpression,
+  buildStyleInjectionExpression,
+  compactInspection,
+  resolveClaudeCliPath,
+  shouldEnableClaudeCodexProxy,
+  splitWorkspaceSource,
+} from '../dist/session.js';
+
+test('Claude Codex proxy is gated by both the ChatGPT bundle and Attune launch flag', () => {
+  assert.equal(shouldEnableClaudeCodexProxy('com.openai.codex', {
+    ATTUNE_CLAUDE_CODEX_PROXY_ENABLED: '1',
+  }), true);
+  assert.equal(shouldEnableClaudeCodexProxy('com.openai.codex', {
+    ATTUNE_CLAUDE_CODEX_PROXY_ENABLED: '0',
+  }), false);
+  assert.equal(shouldEnableClaudeCodexProxy('com.anthropic.claudefordesktop', {
+    ATTUNE_CLAUDE_CODEX_PROXY_ENABLED: '1',
+  }), false);
+});
+
+test('Claude CLI path honors an explicit Attune override', () => {
+  assert.equal(resolveClaudeCliPath({
+    ATTUNE_CLAUDE_CLI_PATH: '/custom/bin/claude',
+    PATH: '',
+  }), '/custom/bin/claude');
+});
 
 test('inspection expression is valid JavaScript and requests agent-relevant context', () => {
   const expression = buildInspectionExpression();

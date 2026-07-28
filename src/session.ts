@@ -1,8 +1,8 @@
-import { execFileSync, spawn } from 'child_process';
-import { createHash } from 'crypto';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, renameSync, rmSync, statSync, writeFileSync } from 'fs';
+import { execFileSync, spawn, type ChildProcess } from 'child_process';
+import { createHash, randomUUID } from 'crypto';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, renameSync, rmSync, statSync, writeFileSync } from 'fs';
 import { homedir, tmpdir } from 'os';
-import { dirname, join } from 'path';
+import { delimiter, dirname, join } from 'path';
 import { createServer } from 'net';
 import { createServer as createHttpServer, type IncomingMessage, type ServerResponse } from 'http';
 import { createCodexTaskFromChatGpt, type ChatGptCodexTransfer } from './codex-chatgpt.js';
@@ -13,6 +13,8 @@ const ATTUNE_DIR = join(homedir(), '.attune');
 const SESSION_DIR = join(ATTUNE_DIR, 'sessions');
 const WORKSPACE_BRIDGE_PATH = join(ATTUNE_DIR, 'workspace-bridge.json');
 const WORKSPACE_BRIDGE_PORT = 47655;
+const CLAUDE_BRIDGE_TOKEN_KEY = 'claude-code-token';
+const activeClaudeProcesses = new Map<string, ChildProcess>();
 const STYLE_ELEMENT_ID = 'attune-custom-stylesheet';
 const WORKSPACE_SCRIPT_RE = /\/\*\s*@attune-script\s*\n([\s\S]*?)\n\s*@end-attune-script\s*\*\//g;
 const POLL_INTERVAL_MS = 500;
@@ -99,6 +101,9 @@ export async function launch(app: DiscoveredApp, cliPath: string): Promise<{ por
     ? join(ATTUNE_DIR, 'chrome-profiles', appId)
     : null;
   if (chromeProfilePath) mkdirSync(chromeProfilePath, { recursive: true });
+  const launchEnvironment = shouldEnableClaudeCodexProxy(app.bundleId)
+    ? ensureClaudeCodexProxyEnvironment(cliPath, executablePath)
+    : process.env;
   const appProcess = spawn(executablePath, [
     '--remote-debugging-address=127.0.0.1',
     `--remote-debugging-port=${port}`,
@@ -107,6 +112,7 @@ export async function launch(app: DiscoveredApp, cliPath: string): Promise<{ por
   ], {
     cwd: dirname(executablePath),
     detached: true,
+    env: launchEnvironment,
     stdio: 'ignore',
   });
   appProcess.unref();
@@ -123,6 +129,58 @@ export async function launch(app: DiscoveredApp, cliPath: string): Promise<{ por
   });
 
   return { port };
+}
+
+export function shouldEnableClaudeCodexProxy(
+  bundleId: string | null,
+  environment: NodeJS.ProcessEnv = process.env,
+): boolean {
+  return bundleId === 'com.openai.codex'
+    && environment.ATTUNE_CLAUDE_CODEX_PROXY_ENABLED === '1';
+}
+
+function ensureClaudeCodexProxyEnvironment(
+  cliPath: string,
+  chatGptExecutablePath: string,
+): NodeJS.ProcessEnv {
+  const proxyModulePath = join(dirname(cliPath), 'claude-codex-proxy.js');
+  const realCodexPath = join(dirname(dirname(chatGptExecutablePath)), 'Resources', 'codex');
+  if (!existsSync(proxyModulePath) || !existsSync(realCodexPath)) return process.env;
+
+  const binRoot = join(ATTUNE_DIR, 'bin');
+  const proxyPath = join(binRoot, 'codex-claude-proxy');
+  mkdirSync(binRoot, { recursive: true });
+  writeFileSync(proxyPath, [
+    '#!/bin/sh',
+    `exec ${shellQuote(process.execPath)} ${shellQuote(proxyModulePath)} "$@"`,
+    '',
+  ].join('\n'), { mode: 0o700 });
+  chmodSync(proxyPath, 0o700);
+  return {
+    ...process.env,
+    ATTUNE_CLAUDE_CLI_PATH: resolveClaudeCliPath(),
+    ATTUNE_REAL_CODEX_CLI_PATH: realCodexPath,
+    CODEX_CLI_PATH: proxyPath,
+  };
+}
+
+export function resolveClaudeCliPath(
+  environment: NodeJS.ProcessEnv = process.env,
+): string {
+  if (environment.ATTUNE_CLAUDE_CLI_PATH) return environment.ATTUNE_CLAUDE_CLI_PATH;
+
+  const candidates = [
+    ...(environment.PATH ?? '').split(delimiter).filter(Boolean).map(path => join(path, 'claude')),
+    join(homedir(), '.local', 'bin', 'claude'),
+    join(homedir(), '.claude', 'local', 'claude'),
+    '/opt/homebrew/bin/claude',
+    '/usr/local/bin/claude',
+  ];
+  return candidates.find(candidate => existsSync(candidate)) ?? 'claude';
+}
+
+function shellQuote(value: string): string {
+  return `'${value.replaceAll("'", "'\\''")}'`;
 }
 
 /** Attach a watcher to an app that is already running with remote debugging enabled. */
@@ -369,6 +427,7 @@ export async function runWatcher(configPath: string, port: number, sessionPath: 
 }
 
 function startWorkspaceBridgeServer(): () => void {
+  ensureClaudeBridgeToken();
   let stopped = false;
   let retryTimer: ReturnType<typeof setTimeout> | undefined;
   const server = createHttpServer((request, response) => {
@@ -396,10 +455,21 @@ function startWorkspaceBridgeServer(): () => void {
   };
 }
 
+function ensureClaudeBridgeToken(): void {
+  const store = readWorkspaceBridgeStore();
+  const existing = store[CLAUDE_BRIDGE_TOKEN_KEY] as { payload?: { token?: unknown } } | undefined;
+  if (typeof existing?.payload?.token === 'string') return;
+  store[CLAUDE_BRIDGE_TOKEN_KEY] = {
+    updatedAt: new Date().toISOString(),
+    payload: { token: randomUUID() },
+  };
+  writeWorkspaceBridgeStore(store);
+}
+
 async function handleWorkspaceBridgeRequest(request: IncomingMessage, response: ServerResponse): Promise<void> {
   response.setHeader('Access-Control-Allow-Origin', '*');
   response.setHeader('Access-Control-Allow-Methods', 'GET,POST,OPTIONS');
-  response.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+  response.setHeader('Access-Control-Allow-Headers', 'Content-Type, X-Attune-Claude-Token');
   response.setHeader('Cache-Control', 'no-store');
 
   if (request.method === 'OPTIONS') {
@@ -437,6 +507,19 @@ async function handleWorkspaceBridgeRequest(request: IncomingMessage, response: 
         }
         return;
       }
+      if (key === 'claude-code') {
+        requireClaudeToken(request);
+        writeJson(response, 200, await runClaudeCode(payload as Record<string, unknown>));
+        return;
+      }
+      if (key === 'claude-code-cancel') {
+        requireClaudeToken(request);
+        const requestId = String((payload as { requestId?: unknown })?.requestId || '');
+        const child = activeClaudeProcesses.get(requestId);
+        child?.kill('SIGTERM');
+        writeJson(response, 200, { cancelled: Boolean(child) });
+        return;
+      }
 
       const store = readWorkspaceBridgeStore();
       store[key] = {
@@ -457,6 +540,61 @@ async function handleWorkspaceBridgeRequest(request: IncomingMessage, response: 
   }
 
   writeJson(response, 405, { error: 'Unsupported method.' });
+}
+
+function requireClaudeToken(request: IncomingMessage): void {
+  const expected = (readWorkspaceBridgeStore()[CLAUDE_BRIDGE_TOKEN_KEY] as { payload?: { token?: unknown } } | undefined)?.payload?.token;
+  if (typeof expected !== 'string' || request.headers['x-attune-claude-token'] !== expected) {
+    throw new Error('Unauthorized Claude Code request.');
+  }
+}
+
+async function runClaudeCode(input: Record<string, unknown>): Promise<{ result: string; sessionId: string }> {
+  const model = String(input.model || '');
+  if (!['fable', 'opus'].includes(model)) throw new Error('Unsupported Claude model.');
+  const prompt = String(input.prompt || '').trim();
+  if (!prompt || Buffer.byteLength(prompt) > 2 * 1024 * 1024) throw new Error('Claude prompt is empty or too large.');
+  const requestId = String(input.requestId || '');
+  if (!requestId) throw new Error('Missing Claude request identifier.');
+  const sessionId = typeof input.sessionId === 'string' && /^[0-9a-f-]{36}$/i.test(input.sessionId)
+    ? input.sessionId
+    : randomUUID();
+  const requestedCwd = String(input.cwd || '');
+  const cwd = requestedCwd.startsWith('/') && existsSync(requestedCwd) ? requestedCwd : homedir();
+  const args = [
+    '--print', '--output-format', 'json',
+    '--model', model,
+    '--permission-mode', 'bypassPermissions',
+    ...(input.resume === true ? ['--resume', sessionId] : ['--session-id', sessionId]),
+    prompt,
+  ];
+  return await new Promise((resolve, reject) => {
+    const child = spawn(process.env.ATTUNE_CLAUDE_CLI_PATH || 'claude', args, {
+      cwd,
+      env: process.env,
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    activeClaudeProcesses.set(requestId, child);
+    let stdout = '';
+    let stderr = '';
+    const timer = setTimeout(() => child.kill('SIGTERM'), 15 * 60 * 1000);
+    child.stdout?.on('data', chunk => { if (stdout.length < 8_000_000) stdout += String(chunk); });
+    child.stderr?.on('data', chunk => { if (stderr.length < 1_000_000) stderr += String(chunk); });
+    child.once('error', reject);
+    child.once('close', code => {
+      clearTimeout(timer);
+      activeClaudeProcesses.delete(requestId);
+      if (code !== 0) return reject(new Error(stderr.trim() || `Claude Code exited with status ${code}.`));
+      try {
+        const response = JSON.parse(stdout) as { result?: unknown; session_id?: unknown };
+        const result = String(response.result || '').trim();
+        if (!result) throw new Error('Claude Code returned no response.');
+        resolve({ result, sessionId: typeof response.session_id === 'string' ? response.session_id : sessionId });
+      } catch (error) {
+        reject(error);
+      }
+    });
+  });
 }
 
 function readWorkspaceBridgeStore(): Record<string, unknown> {
