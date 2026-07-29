@@ -2,12 +2,16 @@
 
 import { spawn, type ChildProcess } from 'child_process';
 import { randomUUID } from 'crypto';
-import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'fs';
+import { existsSync, mkdirSync, readFileSync, realpathSync, renameSync, writeFileSync } from 'fs';
 import { homedir } from 'os';
 import { dirname, join } from 'path';
 import { createInterface } from 'readline';
+import { pathToFileURL } from 'url';
 import {
   ClaudeStreamDecoder,
+  CopilotStreamDecoder,
+  CursorStreamDecoder,
+  GrokStreamDecoder,
   completeCodexToolItem,
   createCodexToolItem,
   failCodexToolItem,
@@ -15,8 +19,22 @@ import {
 } from './claude-stream.js';
 
 type RequestId = string | number;
-type ClaudeModelId = 'claude-fable' | 'claude-opus';
+type ProviderModelId = 'cursor-agent' | 'copilot-agent';
+type ExternalBackend = 'claude' | 'grok' | 'cursor' | 'copilot';
+type ClaudeModelId = 'claude-fable'
+  | 'claude-opus'
+  | 'grok-4.5'
+  | ProviderModelId
+  | `cursor-agent::${string}`
+  | `copilot-agent::${string}`;
 type ClaudeEffort = 'low' | 'medium' | 'high' | 'xhigh' | 'max';
+
+interface DiscoveredProviderModel {
+  id: string;
+  name: string;
+  selectable?: boolean;
+  unavailableReason?: string;
+}
 
 interface ProtocolMessage {
   id?: RequestId;
@@ -29,6 +47,7 @@ interface ProtocolMessage {
 
 interface SyntheticTurn {
   id: string;
+  model?: ClaudeModelId;
   items: Array<Record<string, unknown>>;
   itemsView: 'summary';
   status: 'completed' | 'interrupted' | 'failed';
@@ -40,12 +59,36 @@ interface SyntheticTurn {
 
 interface ClaudeThreadState {
   model: ClaudeModelId | null;
+  nativeModel?: string | null;
+  previousExternalModel?: ClaudeModelId | null;
+  pendingModelChangeFrom?: string | null;
+  modelChangeOverrides?: Record<string, string>;
+  sharedHistory?: SharedHistoryMessage[];
   effort: ClaudeEffort;
   serviceTier: string | null;
   sessionId: string;
   hasStartedSession: boolean;
+  sessions?: Partial<Record<ExternalBackend, ThreadSessionState>>;
   cwd: string;
   turns: SyntheticTurn[];
+}
+
+interface ThreadSessionState {
+  sessionId: string;
+  hasStartedSession: boolean;
+  historyMessageCount?: number;
+}
+
+interface SharedHistoryMessage {
+  role: 'user' | 'assistant';
+  text: string;
+  model: string | null;
+}
+
+interface ActiveNativeTurn {
+  prompt: string;
+  model: string;
+  response: string;
 }
 
 interface ProxyState {
@@ -83,9 +126,15 @@ interface ActiveAgentMessage {
 const REAL_CODEX = process.env.ATTUNE_REAL_CODEX_CLI_PATH
   || '/Applications/ChatGPT.app/Contents/Resources/codex';
 const CLAUDE_CLI = process.env.ATTUNE_CLAUDE_CLI_PATH || 'claude';
+const GROK_CLI = process.env.ATTUNE_GROK_CLI_PATH || 'grok';
+const CURSOR_CLI = process.env.ATTUNE_CURSOR_CLI_PATH || 'cursor-agent';
+const COPILOT_CLI = process.env.ATTUNE_COPILOT_CLI_PATH || 'copilot';
 const FALLBACK_CODEX_MODEL = process.env.ATTUNE_CLAUDE_FALLBACK_CODEX_MODEL || 'gpt-5.6-terra';
 const STATE_PATH = process.env.ATTUNE_CLAUDE_CODEX_STATE_PATH
   || join(homedir(), '.attune', 'claude-codex-proxy.json');
+const PENDING_NEW_THREAD_ID = '00000000-0000-4000-8000-000000000001';
+let nestedModelCatalogPromise: Promise<Record<ProviderModelId, Array<Record<string, unknown>>>> | null = null;
+const modelDisplayNames = new Map<string, string>();
 const CLAUDE_MODELS: Record<ClaudeModelId, Record<string, unknown>> = {
   'claude-fable': {
     id: 'claude-fable',
@@ -123,6 +172,60 @@ const CLAUDE_MODELS: Record<ClaudeModelId, Record<string, unknown>> = {
     defaultServiceTier: null,
     isDefault: false,
   },
+  'grok-4.5': {
+    id: 'grok-4.5',
+    model: 'grok-4.5',
+    upgrade: null,
+    upgradeInfo: null,
+    availabilityNux: null,
+    displayName: 'Grok 4.5',
+    description: 'Grok 4.5 through the local Grok CLI.',
+    hidden: false,
+    supportedReasoningEfforts: grokEffortOptions(),
+    defaultReasoningEffort: 'high',
+    inputModalities: ['text', 'image'],
+    supportsPersonality: false,
+    additionalSpeedTiers: [],
+    serviceTiers: [],
+    defaultServiceTier: null,
+    isDefault: false,
+  },
+  'cursor-agent': {
+    id: 'cursor-agent',
+    model: 'cursor-agent',
+    upgrade: null,
+    upgradeInfo: null,
+    availabilityNux: null,
+    displayName: 'Cursor',
+    description: 'Cursor through the local Cursor CLI and your configured Cursor model.',
+    hidden: false,
+    supportedReasoningEfforts: [],
+    defaultReasoningEffort: null,
+    inputModalities: ['text', 'image'],
+    supportsPersonality: false,
+    additionalSpeedTiers: [],
+    serviceTiers: [],
+    defaultServiceTier: null,
+    isDefault: false,
+  },
+  'copilot-agent': {
+    id: 'copilot-agent',
+    model: 'copilot-agent',
+    upgrade: null,
+    upgradeInfo: null,
+    availabilityNux: null,
+    displayName: 'Copilot',
+    description: 'Copilot CLI using its configured or automatically selected model.',
+    hidden: false,
+    supportedReasoningEfforts: effortOptions(),
+    defaultReasoningEffort: 'medium',
+    inputModalities: ['text', 'image'],
+    supportsPersonality: false,
+    additionalSpeedTiers: [],
+    serviceTiers: [],
+    defaultServiceTier: null,
+    isDefault: false,
+  },
 };
 
 const args = process.argv.slice(2);
@@ -146,6 +249,14 @@ function effortOptions(): Array<Record<string, string>> {
   ];
 }
 
+function grokEffortOptions(): Array<Record<string, string>> {
+  return [
+    { reasoningEffort: 'low', description: 'Quick, fast implementations' },
+    { reasoningEffort: 'medium', description: 'Balanced implementation and testing' },
+    { reasoningEffort: 'high', description: 'Highest implementation quality and reasoning' },
+  ];
+}
+
 function runProxy(): void {
   const realServer = spawn(REAL_CODEX, args, {
     env: process.env,
@@ -155,6 +266,12 @@ function runProxy(): void {
   const pending = new Map<string, PendingRequest>();
   const internalRequestIds = new Set<string>();
   const activeClaude = new Map<string, { child: ChildProcess; threadId: string }>();
+  const activeNativeTurns = new Map<string, ActiveNativeTurn>();
+  let pendingNewThreadSelection: {
+    model: ClaudeModelId;
+    effort: ClaudeEffort;
+    serviceTier: string | null;
+  } | null = null;
   const clientLines = createInterface({ input: process.stdin });
   const serverLines = createInterface({ input: realServer.stdout! });
 
@@ -179,16 +296,63 @@ function runProxy(): void {
     const params = message.params ?? {};
     if (requestKey && method) pending.set(requestKey, { method, params });
 
+    if (method === 'attune/external-model/state' && requestKey) {
+      const threadId = asString(params.threadId);
+      const threadState = threadId ? state.threads[threadId] : pendingNewThreadSelection;
+      pending.delete(requestKey);
+      sendClient({
+        id: message.id,
+        result: externalModelState(threadId, threadState),
+      });
+      return;
+    }
+
+    if (
+      method === 'thread/settings/update'
+      && requestKey
+      && asString(params.threadId) === PENDING_NEW_THREAD_ID
+    ) {
+      const selectedModel = claudeModel(params.model);
+      pendingNewThreadSelection = selectedModel
+        ? {
+            model: selectedModel,
+            effort: claudeEffort(params.effort) ?? defaultEffort(selectedModel),
+            serviceTier: asString(params.serviceTier),
+          }
+        : null;
+      pending.delete(requestKey);
+      sendClient({ id: message.id, result: {} });
+      return;
+    }
+
     if (method === 'turn/start' && requestKey) {
       const threadId = asString(params.threadId);
       const requestedModel = claudeModel(params.model);
       const threadState = threadId ? state.threads[threadId] : undefined;
-      const selectedModel = requestedModel ?? threadState?.model ?? null;
+      // The ChatGPT renderer can expose only a client-new-thread placeholder
+      // even for an existing task. In that case the picker queues an explicit
+      // Attune selection without a UUID. Bind it to the next real turn id.
+      const queuedSelection = pendingNewThreadSelection;
+      if (threadId && queuedSelection) pendingNewThreadSelection = null;
+      // A turn can carry a stale picker value because ChatGPT updates its own
+      // model state asynchronously. It is execution input, not a second model
+      // authority. Once a task has state, run exactly that committed selection.
+      const selectedModel = queuedSelection?.model
+        ?? (threadState ? threadState.model : requestedModel);
       if (threadId && selectedModel) {
-        const effort = claudeEffort(params.effort) ?? threadState?.effort ?? defaultEffort(selectedModel);
-        const serviceTier = asString(params.serviceTier);
+        const effort = queuedSelection?.effort
+          ?? threadState?.effort
+          ?? claudeEffort(params.effort)
+          ?? defaultEffort(selectedModel);
+        const serviceTier = queuedSelection?.serviceTier
+          ?? threadState?.serviceTier
+          ?? asString(params.serviceTier);
         const nextState = threadState ?? createThreadState(selectedModel, effort, serviceTier, asString(params.cwd));
-        nextState.model = selectedModel;
+        const previousModel = threadSelectionModel(nextState);
+        activateThreadModel(nextState, selectedModel);
+        if (previousModel && previousModel !== selectedModel) {
+          nextState.pendingModelChangeFrom = previousModel;
+        }
         nextState.effort = effort;
         nextState.serviceTier = serviceTier;
         if (asString(params.cwd)) nextState.cwd = asString(params.cwd)!;
@@ -226,9 +390,21 @@ function runProxy(): void {
     }
 
     if (method === 'thread/start' && requestKey) {
-      const selectedModel = claudeModel(params.model);
+      const requestedModel = claudeModel(params.model);
+      const queuedSelection = pendingNewThreadSelection;
+      pendingNewThreadSelection = null;
+      const selectedModel = queuedSelection?.model ?? requestedModel;
       if (selectedModel) {
-        pending.set(requestKey, { method, params, selectedModel });
+        const effectiveParams = queuedSelection && selectedModel === queuedSelection.model
+          ? {
+              ...params,
+              model: selectedModel,
+              effort: queuedSelection.effort,
+              serviceTier: queuedSelection.serviceTier,
+              attuneExternalSelection: true,
+            }
+          : params;
+        pending.set(requestKey, { method, params: effectiveParams, selectedModel });
         message = {
           ...message,
           params: { ...params, model: FALLBACK_CODEX_MODEL },
@@ -245,29 +421,66 @@ function runProxy(): void {
           asString(params.serviceTier),
           null,
         );
-        existing.model = selectedModel;
+        const authoritative = params.attuneExternalSelection === true;
+        const effectiveModel = !authoritative
+          && existing.model
+          && providerModelName(existing.model)
+          && parentProviderModel(existing.model) === selectedModel
+            ? existing.model
+            : selectedModel;
+        const previousModel = threadSelectionModel(existing);
+        activateThreadModel(existing, effectiveModel);
+        if (previousModel && previousModel !== effectiveModel) {
+          existing.pendingModelChangeFrom = previousModel;
+        }
         existing.effort = effort;
         existing.serviceTier = asString(params.serviceTier);
         state.threads[threadId] = existing;
         writeState(state);
+        sendExternalThreadSettingsUpdated(threadId, existing);
         message = {
           ...message,
           params: { ...params, model: FALLBACK_CODEX_MODEL },
         };
       } else if (threadId && typeof params.model === 'string') {
-        const existing = state.threads[threadId];
-        if (existing) {
-          existing.model = null;
-          writeState(state);
+        const effort = claudeEffort(params.effort) ?? 'medium';
+        const existing = state.threads[threadId] ?? createNativeThreadState(
+          params.model,
+          effort,
+          asString(params.serviceTier),
+          null,
+        );
+        const previousModel = threadSelectionModel(existing);
+        deactivateThreadModel(existing);
+        existing.nativeModel = params.model;
+        if (previousModel && previousModel !== params.model) {
+          existing.pendingModelChangeFrom = previousModel;
         }
+        existing.effort = effort;
+        existing.serviceTier = asString(params.serviceTier);
+        state.threads[threadId] = existing;
+        writeState(state);
+      }
+    }
+
+    if (method === 'turn/start') {
+      const threadId = asString(params.threadId);
+      const nativeModel = asString(params.model);
+      if (threadId && nativeModel) {
+        activeNativeTurns.set(threadId, {
+          prompt: extractPrompt(params.input),
+          model: nativeModel,
+          response: '',
+        });
       }
     }
 
     sendServer(message);
   });
 
-  serverLines.on('line', line => {
+  serverLines.on('line', async line => {
     let message: ProtocolMessage;
+    let sourceRequest: PendingRequest | undefined;
     try {
       message = JSON.parse(line) as ProtocolMessage;
     } catch {
@@ -280,12 +493,21 @@ function runProxy(): void {
       if (internalRequestIds.delete(requestKey)) return;
       const request = pending.get(requestKey);
       if (request) {
+        sourceRequest = request;
         pending.delete(requestKey);
-        rewriteResponse(message, request, state);
+        await rewriteResponse(message, request, state);
       }
     } else {
       rewriteNotification(message, state);
     }
+    const historyChanged = captureNativeHistory(
+      message,
+      sourceRequest,
+      state,
+      activeNativeTurns,
+    );
+    const modelHistoryChanged = rewriteModelChangedItems(message, sourceRequest, state);
+    if (historyChanged || modelHistoryChanged) writeState(state);
     sendClient(message);
   });
 
@@ -307,6 +529,34 @@ function runProxy(): void {
     if (signal) process.kill(process.pid, signal);
     process.exit(code ?? 1);
   });
+
+  function sendExternalThreadSettingsUpdated(
+    threadId: string,
+    threadState: ClaudeThreadState,
+  ): void {
+    if (!threadState.model) return;
+    sendClient({
+      method: 'thread/settings/updated',
+      params: {
+        threadId,
+        threadSettings: {
+          model: parentProviderModel(threadState.model),
+          modelProvider: null,
+          effort: threadState.effort,
+          serviceTier: threadState.serviceTier ?? 'default',
+          collaborationMode: {
+            mode: 'default',
+            settings: {
+              model: threadState.model,
+              reasoning_effort: threadState.effort,
+              developer_instructions: null,
+            },
+          },
+          cwd: threadState.cwd || homedir(),
+        },
+      },
+    });
+  }
 
   function injectHistory(threadId: string, prompt: string, response: string): void {
     const id = `attune-internal-${randomUUID()}`;
@@ -342,6 +592,11 @@ function runProxy(): void {
     const turnId = randomUUID();
     const userItemId = randomUUID();
     const prompt = extractPrompt(input.params.input);
+    const providerPrompt = promptWithSharedHistory(
+      input.threadState,
+      input.model,
+      prompt,
+    );
     const emittedItems: Array<Record<string, unknown>> = [];
     const agentMessages = new Map<string, ActiveAgentMessage>();
     const tools = new Map<string, ActiveToolItem>();
@@ -388,12 +643,12 @@ function runProxy(): void {
       completedAtMs: startedAtMs,
     });
 
-    const invocationItemId = `claude_${randomUUID().replaceAll('-', '')}`;
+    const invocationItemId = `external_${randomUUID().replaceAll('-', '')}`;
     const invocationStartedAtMs = Date.now();
     const invocationItem = {
       type: 'mcpToolCall',
       id: invocationItemId,
-      server: 'Claude Code',
+      server: providerName(input.model),
       tool: 'agent',
       status: 'inProgress',
       arguments: {
@@ -417,18 +672,21 @@ function runProxy(): void {
       threadId: input.threadId,
       turnId,
       itemId: invocationItemId,
-      message: 'Starting local Claude Code session',
+      message: `Starting local ${providerName(input.model)} session`,
     });
 
     try {
-      invocationResult = await invokeClaude(input, turnId, prompt, handleStreamUpdate);
+      invocationResult = await invokeAgent(input, turnId, providerPrompt, handleStreamUpdate);
       finalText = invocationResult.finalText;
       failureMessage = invocationResult.isError
-        ? invocationResult.errorMessage ?? 'Claude Code returned an error.'
+        ? invocationResult.errorMessage ?? `${providerName(input.model)} returned an error.`
         : null;
+      if (!failureMessage && invocationResult.sessionId) {
+        updateActiveThreadSession(input.threadState, invocationResult.sessionId, true);
+      }
     } catch (error) {
-      stopped = (error as Error).message === 'Claude Code request stopped.';
-      failureMessage = stopped ? null : (error as Error).message;
+      stopped = (error as Error).message === 'External model request stopped.';
+      failureMessage = stopped ? null : friendlyCliError(error as Error, input.model);
     }
 
     for (const [toolUseId, active] of tools) {
@@ -495,6 +753,7 @@ function runProxy(): void {
     }
     const completedTurn: SyntheticTurn = {
       id: turnId,
+      model: input.model,
       items: [userItem, ...emittedItems],
       itemsView: 'summary',
       status: turnStatus,
@@ -505,6 +764,15 @@ function runProxy(): void {
     };
     emit('turn/completed', { threadId: input.threadId, turn: completedTurn });
     input.threadState.turns.push(completedTurn);
+    input.threadState.pendingModelChangeFrom = null;
+    if (turnStatus === 'completed' && prompt && finalText) {
+      const history = ensureSharedHistory(input.threadState);
+      history.push(
+        { role: 'user', text: prompt, model: input.model },
+        { role: 'assistant', text: finalText, model: input.model },
+      );
+      markActiveSessionHistorySynced(input.threadState, history.length);
+    }
     writeState(input.state);
     if (turnStatus === 'completed' && prompt && finalText) {
       injectHistory(input.threadId, prompt, finalText);
@@ -512,8 +780,6 @@ function runProxy(): void {
 
     function handleStreamUpdate(update: ClaudeStreamUpdate): void {
       if (update.type === 'session') {
-        input.threadState.sessionId = update.sessionId;
-        input.threadState.hasStartedSession = true;
         return;
       }
       if (update.type === 'status') {
@@ -601,10 +867,6 @@ function runProxy(): void {
       }
       if (update.type === 'result') {
         finalText = update.result || finalText;
-        if (update.sessionId) {
-          input.threadState.sessionId = update.sessionId;
-          input.threadState.hasStartedSession = true;
-        }
         if (update.isError) {
           failureMessage = update.errorMessage ?? 'Claude Code returned an error.';
         }
@@ -692,7 +954,7 @@ function runProxy(): void {
     }
   }
 
-  function invokeClaude(
+  function invokeAgent(
     input: {
       activeClaude: Map<string, { child: ChildProcess; threadId: string }>;
       effort: ClaudeEffort;
@@ -704,24 +966,9 @@ function runProxy(): void {
     prompt: string,
     onUpdate: (update: ClaudeStreamUpdate) => void,
   ): Promise<ClaudeInvocationResult> {
-    const model = exactModelName(input.model);
-    const cliArgs = [
-      '--print',
-      '--output-format', 'stream-json',
-      '--verbose',
-      '--include-partial-messages',
-      '--model', model,
-      '--effort', input.effort,
-      '--permission-mode', 'bypassPermissions',
-      '--disallowedTools', 'AskUserQuestion',
-      '--append-system-prompt', claudeBridgeInstructions(input.model),
-      ...(input.threadState.hasStartedSession
-        ? ['--resume', input.threadState.sessionId]
-        : ['--session-id', input.threadState.sessionId]),
-      prompt,
-    ];
+    const invocation = cliInvocation(input, prompt);
     return new Promise((resolve, reject) => {
-      const child = spawn(CLAUDE_CLI, cliArgs, {
+      const child = spawn(invocation.command, invocation.args, {
         cwd: input.threadState.cwd || homedir(),
         env: process.env,
         stdio: ['ignore', 'pipe', 'pipe'],
@@ -735,7 +982,13 @@ function runProxy(): void {
       let latestMessageId: string | null = null;
       const messageText = new Map<string, string>();
       let finalStreamedText = '';
-      const decoder = new ClaudeStreamDecoder();
+      const decoder = input.model === 'grok-4.5'
+        ? new GrokStreamDecoder()
+        : input.model === 'cursor-agent' || input.model.startsWith('cursor-agent::')
+          ? new CursorStreamDecoder()
+          : input.model === 'copilot-agent' || input.model.startsWith('copilot-agent::')
+            ? new CopilotStreamDecoder()
+            : new ClaudeStreamDecoder();
       const outputLines = createInterface({ input: child.stdout! });
       const timer = setTimeout(() => {
         timedOut = true;
@@ -767,7 +1020,7 @@ function runProxy(): void {
           try {
             onUpdate(update);
           } catch (error) {
-            process.stderr.write(`[attune] Claude stream translation error: ${(error as Error).message}\n`);
+            process.stderr.write(`[attune] ${providerName(input.model)} stream translation error: ${(error as Error).message}\n`);
           }
         }
       });
@@ -788,15 +1041,15 @@ function runProxy(): void {
         outputLines.close();
         input.activeClaude.delete(turnId);
         if (timedOut) {
-          reject(new Error('Claude Code request timed out after 15 minutes.'));
+          reject(new Error(`${providerName(input.model)} request timed out after 15 minutes.`));
           return;
         }
         if (signal === 'SIGTERM') {
-          reject(new Error('Claude Code request stopped.'));
+          reject(new Error('External model request stopped.'));
           return;
         }
         if (code !== 0) {
-          reject(new Error(stderr.trim() || `Claude Code exited with status ${code}`));
+          reject(new Error(stderr.trim() || `${providerName(input.model)} exited with status ${code}`));
           return;
         }
         const fallbackText = finalStreamedText
@@ -809,29 +1062,65 @@ function runProxy(): void {
           durationMs: null,
         };
         if (!result.finalText) result.finalText = fallbackText;
-        if (result.sessionId) {
-          input.threadState.sessionId = result.sessionId;
-          input.threadState.hasStartedSession = true;
-        }
         resolve(result);
       });
     });
   }
 }
 
-function rewriteResponse(message: ProtocolMessage, request: PendingRequest, state: ProxyState): void {
+async function rewriteResponse(message: ProtocolMessage, request: PendingRequest, state: ProxyState): Promise<void> {
   if (message.error || !message.result) return;
   if (request.method === 'model/list') {
     const data = message.result.data;
     if (Array.isArray(data)) {
+      for (const model of data) {
+        const record = asRecord(model);
+        const id = asString(record?.id) || asString(record?.model);
+        const name = asString(record?.displayName);
+        if (id && name) modelDisplayNames.set(id, name);
+      }
       const withoutDuplicates = data.filter(model => {
         const id = asString((model as Record<string, unknown>)?.id);
         return !id || !claudeModel(id);
       });
+      const nestedModels = await nestedModelCatalog();
+      // Keep submodels addressable by Attune without placing them in the
+      // top-level picker. Their native label is intentionally unprefixed:
+      // the provider row and collapsed picker add the provider exactly once.
+      const hiddenNestedModels = Object.values(nestedModels)
+        .flat()
+        .filter(model => model.id !== 'cursor-agent' && model.id !== 'copilot-agent')
+        .map(model => {
+          const id = asString(model.id);
+          const providerPrefix = id?.startsWith('cursor-agent::')
+            ? 'Cursor · '
+            : id?.startsWith('copilot-agent::')
+              ? 'Copilot · '
+              : '';
+          return {
+            ...model,
+            displayName: `${providerPrefix}${
+              asString(model.displayName) || id || 'Model'
+            }`,
+            hidden: true,
+          };
+        });
       message.result.data = [
         ...withoutDuplicates,
         CLAUDE_MODELS['claude-fable'],
         CLAUDE_MODELS['claude-opus'],
+        CLAUDE_MODELS['grok-4.5'],
+        {
+          ...CLAUDE_MODELS['cursor-agent'],
+          attuneNestedModels: nestedModels['cursor-agent'],
+          attuneSupportsPendingNewThreadSelection: true,
+        },
+        {
+          ...CLAUDE_MODELS['copilot-agent'],
+          attuneNestedModels: nestedModels['copilot-agent'],
+          attuneSupportsPendingNewThreadSelection: true,
+        },
+        ...hiddenNestedModels,
       ];
     }
     return;
@@ -849,9 +1138,24 @@ function rewriteResponse(message: ProtocolMessage, request: PendingRequest, stat
     );
     state.threads[threadId] = threadState;
     writeState(state);
-    message.result.model = request.selectedModel;
+    message.result.model = parentProviderModel(request.selectedModel);
     message.result.reasoningEffort = effort;
     message.result.serviceTier = threadState.serviceTier ?? 'default';
+    return;
+  }
+  if (request.method === 'thread/start') {
+    const thread = asRecord(message.result.thread);
+    const threadId = asString(thread?.id);
+    const nativeModel = asString(request.params.model);
+    if (threadId && nativeModel) {
+      state.threads[threadId] = createNativeThreadState(
+        nativeModel,
+        claudeEffort(request.params.effort) ?? 'medium',
+        asString(request.params.serviceTier),
+        asString(message.result.cwd) ?? asString(request.params.cwd),
+      );
+      writeState(state);
+    }
     return;
   }
   if (request.method === 'thread/resume') {
@@ -859,7 +1163,7 @@ function rewriteResponse(message: ProtocolMessage, request: PendingRequest, stat
     const threadId = asString(thread?.id);
     const threadState = threadId ? state.threads[threadId] : undefined;
     if (threadState?.model) {
-      message.result.model = threadState.model;
+      message.result.model = parentProviderModel(threadState.model);
       message.result.reasoningEffort = threadState.effort;
       message.result.serviceTier = threadState.serviceTier ?? 'default';
     }
@@ -889,7 +1193,7 @@ function rewriteNotification(message: ProtocolMessage, state: ProxyState): void 
   const threadState = threadId ? state.threads[threadId] : undefined;
   const settings = asRecord(message.params.threadSettings);
   if (!threadState?.model || !settings) return;
-  settings.model = threadState.model;
+  settings.model = parentProviderModel(threadState.model);
   settings.effort = threadState.effort;
   settings.serviceTier = threadState.serviceTier ?? 'default';
   const collaborationMode = asRecord(settings.collaborationMode);
@@ -900,27 +1204,402 @@ function rewriteNotification(message: ProtocolMessage, state: ProxyState): void 
   }
 }
 
+function rewriteModelChangedItems(
+  message: ProtocolMessage,
+  request: PendingRequest | undefined,
+  state: ProxyState,
+): boolean {
+  const params = asRecord(message.params);
+  const result = asRecord(message.result);
+  const resultThread = asRecord(result?.thread);
+  const threadId = asString(params?.threadId)
+    || asString(request?.params.threadId)
+    || asString(resultThread?.id);
+  const threadState = threadId ? state.threads[threadId] : undefined;
+  if (!threadState) return false;
+  let changed = false;
+  const visited = new Set<object>();
+  const visit = (value: unknown): void => {
+    if (!value || typeof value !== 'object' || visited.has(value)) return;
+    visited.add(value);
+    if (Array.isArray(value)) {
+      for (const entry of value) visit(entry);
+      return;
+    }
+    const item = value as Record<string, unknown>;
+    if (item.type === 'modelChanged') {
+      const itemId = asString(item.id);
+      const savedOverride = itemId
+        ? threadState.modelChangeOverrides?.[itemId]
+        : null;
+      const externalModel = savedOverride
+        || (!threadState.model
+          ? threadState.pendingModelChangeFrom || threadState.previousExternalModel
+          : null);
+      if (externalModel && item.fromModel !== externalModel) {
+        item.fromModel = externalModel;
+        changed = true;
+      }
+      if (
+        externalModel
+        && itemId
+        && threadState.modelChangeOverrides?.[itemId] !== externalModel
+      ) {
+        threadState.modelChangeOverrides ??= {};
+        threadState.modelChangeOverrides[itemId] = externalModel;
+        changed = true;
+      }
+    }
+    for (const nested of Object.values(item)) visit(nested);
+  };
+  visit(message);
+  const resultTurn = asRecord(result?.turn);
+  if (
+    !threadState.model
+    && (threadState.pendingModelChangeFrom || threadState.previousExternalModel)
+    && (
+      message.method === 'turn/completed'
+      || resultTurn?.status === 'completed'
+    )
+  ) {
+    threadState.previousExternalModel = null;
+    threadState.pendingModelChangeFrom = null;
+    changed = true;
+  }
+  return changed;
+}
+
+function captureNativeHistory(
+  message: ProtocolMessage,
+  request: PendingRequest | undefined,
+  state: ProxyState,
+  activeNativeTurns: Map<string, ActiveNativeTurn>,
+): boolean {
+  const params = asRecord(message.params);
+  const result = asRecord(message.result);
+  const threadId = asString(params?.threadId) || asString(request?.params.threadId);
+  if (!threadId) return false;
+  const active = activeNativeTurns.get(threadId);
+  if (!active) return false;
+  if (message.error) {
+    activeNativeTurns.delete(threadId);
+    return false;
+  }
+  if (message.method === 'item/agentMessage/delta') {
+    active.response += asString(params?.delta) || '';
+  }
+  const completedItem = asRecord(params?.item);
+  if (message.method === 'item/completed' && completedItem?.type === 'agentMessage') {
+    const text = asString(completedItem.text);
+    if (text && (completedItem.phase === 'final_answer' || !active.response)) {
+      active.response = text;
+    }
+  }
+  const resultTurn = asRecord(result?.turn);
+  const completedTurn = message.method === 'turn/completed'
+    ? asRecord(params?.turn)
+    : resultTurn?.status === 'completed'
+      ? resultTurn
+      : null;
+  if (!completedTurn) return false;
+  const finalText = finalAgentMessageText(completedTurn) || active.response;
+  const threadState = state.threads[threadId] ?? createNativeThreadState(
+    active.model,
+    'medium',
+    null,
+    null,
+  );
+  state.threads[threadId] = threadState;
+  activeNativeTurns.delete(threadId);
+  if (!active.prompt || !finalText) return false;
+  ensureSharedHistory(threadState).push(
+    { role: 'user', text: active.prompt, model: active.model },
+    { role: 'assistant', text: finalText, model: active.model },
+  );
+  return true;
+}
+
+function finalAgentMessageText(value: unknown): string {
+  const final: string[] = [];
+  const fallback: string[] = [];
+  const visit = (entry: unknown): void => {
+    if (!entry || typeof entry !== 'object') return;
+    if (Array.isArray(entry)) {
+      for (const nested of entry) visit(nested);
+      return;
+    }
+    const item = entry as Record<string, unknown>;
+    if (item.type === 'agentMessage') {
+      const text = asString(item.text);
+      if (text) {
+        fallback.push(text);
+        if (item.phase === 'final_answer') final.push(text);
+      }
+    }
+    for (const nested of Object.values(item)) visit(nested);
+  };
+  visit(value);
+  return final.at(-1) || fallback.at(-1) || '';
+}
+
 function createThreadState(
   model: ClaudeModelId,
   effort: ClaudeEffort,
   serviceTier: string | null,
   cwd: string | null,
 ): ClaudeThreadState {
-  return {
-    model,
-    effort,
-    serviceTier,
+  const session = {
     sessionId: randomUUID(),
     hasStartedSession: false,
+  };
+  return {
+    model,
+    nativeModel: null,
+    previousExternalModel: null,
+    pendingModelChangeFrom: null,
+    modelChangeOverrides: {},
+    sharedHistory: [],
+    effort,
+    serviceTier,
+    sessionId: session.sessionId,
+    hasStartedSession: session.hasStartedSession,
+    sessions: {
+      [backendForModel(model)]: {
+        ...session,
+        historyMessageCount: 0,
+      },
+    },
     cwd: cwd || homedir(),
     turns: [],
   };
 }
 
+function createNativeThreadState(
+  model: string,
+  effort: ClaudeEffort,
+  serviceTier: string | null,
+  cwd: string | null,
+): ClaudeThreadState {
+  return {
+    model: null,
+    nativeModel: model,
+    previousExternalModel: null,
+    pendingModelChangeFrom: null,
+    modelChangeOverrides: {},
+    sharedHistory: [],
+    effort,
+    serviceTier,
+    sessionId: randomUUID(),
+    hasStartedSession: false,
+    sessions: {},
+    cwd: cwd || homedir(),
+    turns: [],
+  };
+}
+
+function activateThreadModel(threadState: ClaudeThreadState, model: ClaudeModelId): void {
+  const sessions = ensureThreadSessions(threadState);
+  if (threadState.model) {
+    const previousBackend = backendForModel(threadState.model);
+    sessions[previousBackend] = {
+      ...sessions[previousBackend],
+      sessionId: threadState.sessionId,
+      hasStartedSession: threadState.hasStartedSession,
+    };
+  }
+  const backend = backendForModel(model);
+  const session = sessions[backend] ?? {
+    sessionId: randomUUID(),
+    hasStartedSession: false,
+    historyMessageCount: 0,
+  };
+  sessions[backend] = session;
+  threadState.model = model;
+  threadState.nativeModel = null;
+  threadState.previousExternalModel = null;
+  threadState.sessionId = session.sessionId;
+  threadState.hasStartedSession = session.hasStartedSession;
+}
+
+function deactivateThreadModel(threadState: ClaudeThreadState): void {
+  const sessions = ensureThreadSessions(threadState);
+  if (threadState.model) {
+    threadState.previousExternalModel = threadState.model;
+    const previousBackend = backendForModel(threadState.model);
+    sessions[previousBackend] = {
+      ...sessions[previousBackend],
+      sessionId: threadState.sessionId,
+      hasStartedSession: threadState.hasStartedSession,
+    };
+  }
+  threadState.model = null;
+  threadState.sessionId = randomUUID();
+  threadState.hasStartedSession = false;
+}
+
+function updateActiveThreadSession(
+  threadState: ClaudeThreadState,
+  sessionId: string,
+  hasStartedSession: boolean,
+): void {
+  threadState.sessionId = sessionId;
+  threadState.hasStartedSession = hasStartedSession;
+  if (threadState.model) {
+    const sessions = ensureThreadSessions(threadState);
+    const backend = backendForModel(threadState.model);
+    sessions[backend] = {
+      ...sessions[backend],
+      sessionId,
+      hasStartedSession,
+    };
+  }
+}
+
+function ensureThreadSessions(
+  threadState: ClaudeThreadState,
+): Partial<Record<ExternalBackend, ThreadSessionState>> {
+  if (!threadState.sessions) {
+    threadState.sessions = {};
+    // Legacy scalar sessions are safe to migrate only when their originating
+    // external model is still known. A null model may hold any provider's ID.
+    if (threadState.model) {
+      threadState.sessions[backendForModel(threadState.model)] = {
+        sessionId: threadState.sessionId,
+        hasStartedSession: threadState.hasStartedSession,
+        historyMessageCount: undefined,
+      };
+    }
+  }
+  const historyLength = ensureSharedHistory(threadState).length;
+  for (const [backend, session] of Object.entries(threadState.sessions)) {
+    if (!session || session.historyMessageCount !== undefined) continue;
+    // Older provider sessions do not know which turns they have seen. Start a
+    // fresh CLI session once and seed it from the shared transcript so history
+    // is complete without duplicating an unknown provider-local context.
+    session.sessionId = randomUUID();
+    session.hasStartedSession = false;
+    session.historyMessageCount = 0;
+    if (
+      threadState.model
+      && backendForModel(threadState.model) === backend
+    ) {
+      threadState.sessionId = session.sessionId;
+      threadState.hasStartedSession = false;
+    }
+  }
+  return threadState.sessions;
+}
+
+function markActiveSessionHistorySynced(
+  threadState: ClaudeThreadState,
+  historyMessageCount: number,
+): void {
+  if (!threadState.model) return;
+  const sessions = ensureThreadSessions(threadState);
+  const backend = backendForModel(threadState.model);
+  const session = sessions[backend];
+  if (!session) return;
+  session.historyMessageCount = historyMessageCount;
+}
+
+function promptWithSharedHistory(
+  threadState: ClaudeThreadState,
+  model: ClaudeModelId,
+  prompt: string,
+): string {
+  const history = ensureSharedHistory(threadState);
+  const sessions = ensureThreadSessions(threadState);
+  const session = sessions[backendForModel(model)];
+  const syncedCount = Math.max(
+    0,
+    Math.min(session?.historyMessageCount ?? 0, history.length),
+  );
+  const updates = history.slice(syncedCount);
+  if (!updates.length) return prompt;
+  const transcript = updates.map(message => {
+    const modelName = message.model ? historyModelName(message.model) : '';
+    const speaker = message.role === 'user'
+      ? 'User'
+      : modelName
+        ? `Assistant (${modelName})`
+        : 'Assistant';
+    return `${speaker}: ${message.text}`;
+  }).join('\n\n');
+  const boundedTranscript = transcript.length > 80_000
+    ? `[Earlier transcript truncated]\n${transcript.slice(-80_000)}`
+    : transcript;
+  return [
+    'Conversation updates from turns handled outside this CLI session follow.',
+    'Treat them as earlier conversation context. Do not answer them separately.',
+    '<attune_conversation_history>',
+    boundedTranscript,
+    '</attune_conversation_history>',
+    '',
+    'Current user request:',
+    prompt,
+  ].join('\n');
+}
+
+function ensureSharedHistory(threadState: ClaudeThreadState): SharedHistoryMessage[] {
+  if (Array.isArray(threadState.sharedHistory)) return threadState.sharedHistory;
+  threadState.sharedHistory = [...threadState.turns]
+    .sort((left, right) => left.startedAt - right.startedAt)
+    .flatMap(turn => sharedHistoryFromSyntheticTurn(turn));
+  return threadState.sharedHistory;
+}
+
+function sharedHistoryFromSyntheticTurn(turn: SyntheticTurn): SharedHistoryMessage[] {
+  const prompt = turn.items
+    .filter(item => item.type === 'userMessage')
+    .map(item => extractPrompt(item.content))
+    .filter(Boolean)
+    .join('\n');
+  const response = turn.items
+    .filter(item => item.type === 'agentMessage' && item.phase === 'final_answer')
+    .map(item => asString(item.text))
+    .filter((text): text is string => Boolean(text))
+    .at(-1) || finalAgentMessageText(turn.items);
+  return [
+    ...(prompt ? [{ role: 'user' as const, text: prompt, model: turn.model || null }] : []),
+    ...(response
+      ? [{ role: 'assistant' as const, text: response, model: turn.model || null }]
+      : []),
+  ];
+}
+
+function historyModelName(model: string): string {
+  const external = claudeModel(model);
+  return external
+    ? displayName(external)
+    : modelDisplayNames.get(model) || humanizeModelName(model);
+}
+
+function threadSelectionModel(threadState: ClaudeThreadState): string | null {
+  return threadState.model || threadState.nativeModel || null;
+}
+
+function backendForModel(model: ClaudeModelId): ExternalBackend {
+  if (model === 'grok-4.5') return 'grok';
+  if (model === 'cursor-agent' || model.startsWith('cursor-agent::')) return 'cursor';
+  if (model === 'copilot-agent' || model.startsWith('copilot-agent::')) return 'copilot';
+  return 'claude';
+}
+
 function readState(): ProxyState {
   try {
     const parsed = JSON.parse(readFileSync(STATE_PATH, 'utf8')) as ProxyState;
-    if (parsed.version === 1 && parsed.threads && typeof parsed.threads === 'object') return parsed;
+    if (parsed.version === 1 && parsed.threads && typeof parsed.threads === 'object') {
+      for (const threadId of Object.keys(parsed.threads)) {
+        if (
+          threadId === PENDING_NEW_THREAD_ID
+          || threadId.startsWith('__attune_')
+          || threadId.startsWith('client-new-thread:')
+        ) {
+          delete parsed.threads[threadId];
+        }
+      }
+      return parsed;
+    }
   } catch {
     // Start with an empty sidecar when state is missing or from an older format.
   }
@@ -970,7 +1649,19 @@ function extractPrompt(value: unknown): string {
 }
 
 function claudeModel(value: unknown): ClaudeModelId | null {
-  return value === 'claude-fable' || value === 'claude-opus' ? value : null;
+  if (
+    value === 'claude-fable'
+    || value === 'claude-opus'
+    || value === 'grok-4.5'
+    || value === 'cursor-agent'
+    || value === 'copilot-agent'
+  ) return value;
+  if (
+    typeof value === 'string'
+    && (value.startsWith('cursor-agent::') || value.startsWith('copilot-agent::'))
+    && providerModelName(value)
+  ) return value as ClaudeModelId;
+  return null;
 }
 
 function claudeEffort(value: unknown): ClaudeEffort | null {
@@ -984,15 +1675,69 @@ function claudeEffort(value: unknown): ClaudeEffort | null {
 }
 
 function defaultEffort(model: ClaudeModelId): ClaudeEffort {
-  return model === 'claude-opus' ? 'high' : 'medium';
+  return model === 'claude-opus' || model === 'grok-4.5' ? 'high' : 'medium';
 }
 
 function exactModelName(model: ClaudeModelId): string {
-  return model === 'claude-fable' ? 'claude-fable-5' : 'claude-opus-5';
+  if (model === 'claude-fable') return 'claude-fable-5';
+  if (model === 'claude-opus') return 'claude-opus-5';
+  if (model === 'grok-4.5') return 'grok-4.5';
+  const nested = providerModelName(model);
+  if (nested) return nested;
+  if (model === 'copilot-agent') return 'auto';
+  return 'auto';
 }
 
 function displayName(model: ClaudeModelId): string {
-  return model === 'claude-fable' ? 'Claude Fable 5' : 'Claude Opus 5';
+  if (model === 'claude-fable') return 'Claude Fable 5';
+  if (model === 'claude-opus') return 'Claude Opus 5';
+  if (model === 'grok-4.5') return 'Grok 4.5';
+  const nested = providerModelName(model);
+  if (nested) return `${providerName(model)} · ${humanizeModelName(nested)}`;
+  if (model === 'copilot-agent') return 'Copilot';
+  return 'Cursor';
+}
+
+function externalModelState(
+  threadId: string | null,
+  selection: Pick<ClaudeThreadState, 'model' | 'nativeModel' | 'effort' | 'serviceTier'>
+    | {
+        model: ClaudeModelId;
+        nativeModel?: null;
+        effort: ClaudeEffort;
+        serviceTier: string | null;
+      }
+    | null
+    | undefined,
+): Record<string, unknown> {
+  const externalModel = selection?.model ?? null;
+  const model = externalModel || selection?.nativeModel || null;
+  const providerId = externalModel === 'cursor-agent'
+    || externalModel?.startsWith('cursor-agent::')
+    ? 'cursor-agent'
+    : externalModel === 'copilot-agent'
+      || externalModel?.startsWith('copilot-agent::')
+      ? 'copilot-agent'
+      : null;
+  const nestedModel = externalModel ? providerModelName(externalModel) : null;
+  return {
+    threadId,
+    model,
+    externalModel,
+    parentModel: externalModel ? parentProviderModel(externalModel) : model,
+    providerId,
+    displayName: externalModel
+      ? nestedModel
+        ? humanizeModelName(nestedModel)
+        : providerId
+          ? 'Auto'
+          : displayName(externalModel)
+      : model
+        ? modelDisplayNames.get(model) || humanizeModelName(model)
+      : null,
+    effort: selection?.effort ?? null,
+    serviceTier: selection?.serviceTier ?? null,
+  };
 }
 
 function claudeBridgeInstructions(model: ClaudeModelId): string {
@@ -1005,12 +1750,317 @@ function claudeBridgeInstructions(model: ClaudeModelId): string {
   ].join(' ');
 }
 
+function providerName(model: ClaudeModelId): string {
+  if (model === 'grok-4.5') return 'Grok CLI';
+  if (model === 'cursor-agent' || model.startsWith('cursor-agent::')) return 'Cursor';
+  if (model === 'copilot-agent' || model.startsWith('copilot-agent::')) return 'Copilot';
+  return 'Claude Code';
+}
+
+function parentProviderModel(model: ClaudeModelId): ClaudeModelId {
+  if (model.startsWith('cursor-agent::')) return 'cursor-agent';
+  if (model.startsWith('copilot-agent::')) return 'copilot-agent';
+  return model;
+}
+
+function providerModelName(model: string): string | null {
+  const separator = model.indexOf('::');
+  if (separator < 0) return null;
+  try {
+    return decodeURIComponent(model.slice(separator + 2)) || null;
+  } catch {
+    return null;
+  }
+}
+
+function cliInvocation(
+  input: {
+    effort: ClaudeEffort;
+    model: ClaudeModelId;
+    threadState: ClaudeThreadState;
+  },
+  prompt: string,
+): { command: string; args: string[] } {
+  if (input.model === 'grok-4.5') {
+    return {
+      command: GROK_CLI,
+      args: [
+        '--no-auto-update',
+        '--output-format', 'streaming-json',
+        '--model', exactModelName(input.model),
+        '--effort', input.effort,
+        '--yolo',
+        '--rules', claudeBridgeInstructions(input.model),
+        ...(input.threadState.hasStartedSession
+          ? ['--resume', input.threadState.sessionId]
+          : ['--session-id', input.threadState.sessionId]),
+        '-p', prompt,
+      ],
+    };
+  }
+  if (input.model === 'cursor-agent' || input.model.startsWith('cursor-agent::')) {
+    const selectedModel = providerModelName(input.model);
+    return {
+      command: CURSOR_CLI,
+      args: [
+        '--print',
+        '--force',
+        '--output-format', 'stream-json',
+        '--model', selectedModel || 'auto',
+        ...(input.threadState.hasStartedSession
+          ? ['--resume', input.threadState.sessionId]
+          : []),
+        `${claudeBridgeInstructions(input.model)}\n\n${prompt}`,
+      ],
+    };
+  }
+  if (input.model === 'copilot-agent' || input.model.startsWith('copilot-agent::')) {
+    const selectedModel = providerModelName(input.model);
+    return {
+      command: COPILOT_CLI,
+      args: [
+        '--no-auto-update',
+        '--output-format', 'json',
+        '--stream', 'on',
+        '--allow-all',
+        '--no-ask-user',
+        '--model', selectedModel || 'auto',
+        ...(selectedModel ? ['--effort', input.effort] : []),
+        '--session-id', input.threadState.sessionId,
+        '--prompt', `${claudeBridgeInstructions(input.model)}\n\n${prompt}`,
+      ],
+    };
+  }
+  return {
+    command: CLAUDE_CLI,
+    args: [
+      '--print',
+      '--output-format', 'stream-json',
+      '--verbose',
+      '--include-partial-messages',
+      '--model', exactModelName(input.model),
+      '--effort', input.effort,
+      '--permission-mode', 'bypassPermissions',
+      '--disallowedTools', 'AskUserQuestion',
+      '--append-system-prompt', claudeBridgeInstructions(input.model),
+      ...(input.threadState.hasStartedSession
+        ? ['--resume', input.threadState.sessionId]
+        : ['--session-id', input.threadState.sessionId]),
+      prompt,
+    ],
+  };
+}
+
+async function nestedModelCatalog(): Promise<Record<ProviderModelId, Array<Record<string, unknown>>>> {
+  nestedModelCatalogPromise ??= Promise.all([
+    discoverCursorModels(),
+    discoverCopilotModels(),
+  ]).then(([cursor, copilot]) => ({
+    'cursor-agent': providerModelEntries('cursor-agent', cursor, false),
+    'copilot-agent': providerModelEntries('copilot-agent', copilot, true),
+  }));
+  return nestedModelCatalogPromise;
+}
+
+async function discoverCursorModels(): Promise<DiscoveredProviderModel[]> {
+  const configured = configuredModels('ATTUNE_CURSOR_MODELS_JSON');
+  if (configured) return configured;
+  try {
+    const [catalogOutput, aboutOutput] = await Promise.all([
+      commandOutput(CURSOR_CLI, ['--list-models'], 30_000),
+      commandOutput(CURSOR_CLI, ['about'], 30_000).catch(() => ''),
+    ]);
+    const subscriptionTier = parseCursorSubscriptionTier(aboutOutput);
+    const namedModelsSelectable = subscriptionTier?.toLowerCase() !== 'free';
+    return parseCursorModels(catalogOutput).map(model => ({
+      ...model,
+      selectable: namedModelsSelectable,
+      unavailableReason: namedModelsSelectable
+        ? undefined
+        : 'Requires a paid Cursor plan.',
+    }));
+  } catch {
+    return [];
+  }
+}
+
+async function discoverCopilotModels(): Promise<DiscoveredProviderModel[]> {
+  const configured = configuredModels('ATTUNE_COPILOT_MODELS_JSON');
+  if (configured) return configured;
+  try {
+    const command = resolveCommandPath(COPILOT_CLI);
+    if (!command) return [];
+    const packageRoot = dirname(realpathSync(command));
+    const platformPackage = `copilot-${process.platform}-${process.arch}`;
+    const sdkPath = join(packageRoot, 'node_modules', '@github', platformPackage, 'sdk', 'index.js');
+    if (!existsSync(sdkPath)) return [];
+    const sdk = await import(pathToFileURL(sdkPath).href) as {
+      getAvailableModels?: (authInfo: unknown) => Promise<unknown>;
+      resolveAuthInfoFromToken?: (token: string) => Promise<unknown>;
+    };
+    if (
+      typeof sdk.getAvailableModels !== 'function'
+      || typeof sdk.resolveAuthInfoFromToken !== 'function'
+    ) return [];
+    const token = process.env.GH_TOKEN
+      || process.env.GITHUB_TOKEN
+      || (await commandOutput('gh', ['auth', 'token'])).trim();
+    if (!token) return [];
+    const authInfo = await sdk.resolveAuthInfoFromToken(token);
+    const available = await sdk.getAvailableModels(authInfo);
+    if (!Array.isArray(available)) return [];
+    return available.flatMap(entry => {
+      const model = asRecord(entry);
+      const id = asString(model?.id);
+      if (!id || id === 'auto') return [];
+      return [{
+        id,
+        name: asString(model?.name)
+          || asString(model?.displayName)
+          || humanizeModelName(id),
+      }];
+    });
+  } catch {
+    // A generic help list can contain models that the authenticated account
+    // cannot select explicitly. Auto is always injected separately and is the
+    // only safe fallback when account-filtered discovery is unavailable.
+    return [];
+  }
+}
+
+function configuredModels(environmentKey: string): DiscoveredProviderModel[] | null {
+  const value = process.env[environmentKey];
+  if (!value) return null;
+  try {
+    const parsed = JSON.parse(value) as unknown;
+    if (!Array.isArray(parsed)) return null;
+    return parsed.flatMap(entry => {
+      if (typeof entry === 'string' && entry) {
+        return [{ id: entry, name: humanizeModelName(entry) }];
+      }
+      const record = asRecord(entry);
+      const id = asString(record?.id);
+      return id ? [{
+        id,
+        name: asString(record?.name) || humanizeModelName(id),
+        selectable: typeof record?.selectable === 'boolean' ? record.selectable : undefined,
+        unavailableReason: asString(record?.unavailableReason) || undefined,
+      }] : [];
+    });
+  } catch {
+    return null;
+  }
+}
+
+function parseCursorModels(output: string): DiscoveredProviderModel[] {
+  const plain = output.replace(/\u001b\[[0-9;?]*[ -/]*[@-~]/g, '');
+  const models: Array<{ id: string; name: string }> = [];
+  for (const line of plain.split(/\r?\n/)) {
+    const match = line.trim().match(/^(\S+)\s+-\s+(.+?)(?:\s+\([^)]*\))*$/);
+    if (!match || match[1] === 'Available') continue;
+    models.push({ id: match[1], name: match[2].trim() });
+  }
+  return models;
+}
+
+function parseCursorSubscriptionTier(output: string): string | null {
+  const plain = output.replace(/\u001b\[[0-9;?]*[ -/]*[@-~]/g, '');
+  return plain.match(/^\s*Subscription Tier\s+(.+?)\s*$/mi)?.[1]?.trim() || null;
+}
+
+function providerModelEntries(
+  provider: ProviderModelId,
+  models: DiscoveredProviderModel[],
+  supportsEffort: boolean,
+): Array<Record<string, unknown>> {
+  const entries = [{ id: 'auto', name: 'Auto' }, ...models.filter(model => model.id !== 'auto')];
+  return entries.map(model => {
+    const modelId = model.id === 'auto'
+      ? provider
+      : `${provider}::${encodeURIComponent(model.id)}`;
+    return {
+      id: modelId,
+      model: modelId,
+      displayName: model.name,
+      description: `${model.name} through ${provider === 'cursor-agent' ? 'Cursor' : 'Copilot'}.`,
+      supportedReasoningEfforts: supportsEffort ? effortOptions() : [],
+      defaultReasoningEffort: supportsEffort ? 'medium' : null,
+      isDefault: model.id === 'auto',
+      attuneSelectable: model.id === 'auto' || model.selectable !== false,
+      attuneUnavailableReason: model.id === 'auto'
+        ? null
+        : model.unavailableReason || null,
+    };
+  });
+}
+
+function humanizeModelName(value: string): string {
+  return value
+    .split('-')
+    .map(part => {
+      if (/^(gpt|glm)$/i.test(part)) return part.toUpperCase();
+      if (/^\d+(?:\.\d+)?$/.test(part)) return part;
+      return part ? part[0].toUpperCase() + part.slice(1) : part;
+    })
+    .join(' ');
+}
+
+function resolveCommandPath(command: string): string | null {
+  if (command.includes('/')) return existsSync(command) ? command : null;
+  for (const directory of (process.env.PATH || '').split(':')) {
+    const candidate = join(directory, command);
+    if (existsSync(candidate)) return candidate;
+  }
+  return null;
+}
+
+function commandOutput(command: string, args: string[], timeoutMs = 15_000): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const child = spawn(command, args, {
+      env: { ...process.env, NO_COLOR: '1', FORCE_COLOR: '0' },
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    let stdout = '';
+    let stderr = '';
+    const timer = setTimeout(() => child.kill('SIGTERM'), timeoutMs);
+    child.stdout?.on('data', chunk => {
+      if (stdout.length < 2_000_000) stdout += String(chunk);
+    });
+    child.stderr?.on('data', chunk => {
+      if (stderr.length < 100_000) stderr += String(chunk);
+    });
+    child.once('error', error => {
+      clearTimeout(timer);
+      reject(error);
+    });
+    child.once('close', code => {
+      clearTimeout(timer);
+      if (code === 0) resolve(stdout);
+      else reject(new Error(stderr.trim() || `${command} exited with status ${code}`));
+    });
+  });
+}
+
+function friendlyCliError(error: Error, model: ClaudeModelId): string {
+  if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+    const executable = model === 'grok-4.5'
+      ? GROK_CLI
+      : model === 'cursor-agent' || model.startsWith('cursor-agent::')
+        ? CURSOR_CLI
+        : model === 'copilot-agent' || model.startsWith('copilot-agent::')
+          ? COPILOT_CLI
+        : CLAUDE_CLI;
+    return `${providerName(model)} is not installed or could not be found at “${executable}”. Install and authenticate its CLI, then restart ChatGPT.`;
+  }
+  return error.message;
+}
+
 function statusMessage(status: string): string | null {
-  if (status === 'requesting') return 'Waiting for Claude response';
-  if (status === 'reasoning') return 'Claude is reasoning';
-  if (status === 'compacting') return 'Compacting Claude conversation context';
-  if (status === 'tool') return 'Claude is using a tool';
-  return status ? `Claude status: ${status}` : null;
+  if (status === 'requesting') return 'Waiting for model response';
+  if (status === 'reasoning') return 'Model is reasoning';
+  if (status === 'compacting') return 'Compacting conversation context';
+  if (status === 'tool') return 'Model is using a tool';
+  return status ? `Model status: ${status}` : null;
 }
 
 function asString(value: unknown): string | null {

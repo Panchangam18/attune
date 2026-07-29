@@ -2,9 +2,164 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
   ClaudeStreamDecoder,
+  CopilotStreamDecoder,
+  CursorStreamDecoder,
+  GrokStreamDecoder,
   completeCodexToolItem,
   createCodexToolItem,
 } from '../dist/claude-stream.js';
+
+test('Copilot stream decoder translates message, tool, and result events', () => {
+  const decoder = new CopilotStreamDecoder();
+  const updates = [
+    ...decoder.push({
+      type: 'assistant.message_start',
+      data: { messageId: 'copilot-message' },
+    }),
+    ...decoder.push({
+      type: 'assistant.message_delta',
+      data: { messageId: 'copilot-message', deltaContent: 'COPILOT_OK' },
+    }),
+    ...decoder.push({
+      type: 'tool.execution_start',
+      data: {
+        toolCallId: 'copilot-shell',
+        toolName: 'bash',
+        arguments: { command: 'printf ok' },
+      },
+    }),
+    ...decoder.push({
+      type: 'tool.execution_complete',
+      data: {
+        toolCallId: 'copilot-shell',
+        success: true,
+        result: { content: 'ok' },
+      },
+    }),
+    ...decoder.push({
+      type: 'result',
+      sessionId: 'copilot-session',
+      exitCode: 0,
+    }),
+  ];
+  assert.ok(updates.some(update => (
+    update.type === 'textDelta' && update.text === 'COPILOT_OK'
+  )));
+  assert.ok(updates.some(update => (
+    update.type === 'toolStarted'
+    && update.call.name === 'Bash'
+    && update.call.input.command === 'printf ok'
+  )));
+  assert.ok(updates.some(update => (
+    update.type === 'toolFinished'
+    && update.toolUseId === 'copilot-shell'
+    && !update.isError
+  )));
+  assert.ok(updates.some(update => (
+    update.type === 'result'
+    && update.sessionId === 'copilot-session'
+    && !update.isError
+  )));
+});
+
+test('Cursor stream decoder concatenates assistant deltas and maps tool events', () => {
+  const decoder = new CursorStreamDecoder();
+  const updates = [
+    ...decoder.push({
+      type: 'assistant',
+      message: { content: [{ type: 'text', text: 'CURSOR_' }] },
+      session_id: 'cursor-session',
+    }),
+    ...decoder.push({
+      type: 'assistant',
+      message: { content: [{ type: 'text', text: 'DONE' }] },
+      session_id: 'cursor-session',
+    }),
+    ...decoder.push({
+      type: 'tool_call',
+      subtype: 'started',
+      call_id: 'cursor-read',
+      tool_call: { readToolCall: { args: { path: 'README.md' } } },
+      session_id: 'cursor-session',
+    }),
+    ...decoder.push({
+      type: 'tool_call',
+      subtype: 'completed',
+      call_id: 'cursor-read',
+      tool_call: {
+        readToolCall: {
+          args: { path: 'README.md' },
+          result: { success: { content: 'read ok' } },
+        },
+      },
+      session_id: 'cursor-session',
+    }),
+    ...decoder.push({
+      type: 'result',
+      subtype: 'success',
+      is_error: false,
+      result: 'CURSOR_DONE',
+      session_id: 'cursor-session',
+    }),
+  ];
+  assert.deepEqual(
+    updates.filter(update => update.type === 'textDelta').map(update => update.text),
+    ['CURSOR_', 'DONE'],
+  );
+  assert.ok(updates.some(update => (
+    update.type === 'toolStarted'
+    && update.call.name === 'Read'
+    && update.call.input.path === 'README.md'
+  )));
+  assert.ok(updates.some(update => (
+    update.type === 'toolFinished'
+    && update.toolUseId === 'cursor-read'
+    && !update.isError
+  )));
+});
+
+test('Grok stream decoder translates documented headless deltas and completion', () => {
+  const decoder = new GrokStreamDecoder();
+  const updates = [
+    ...decoder.push({ type: 'thought', data: 'Working privately' }),
+    ...decoder.push({ type: 'text', data: 'GROK_' }),
+    ...decoder.push({ type: 'text', data: 'DONE' }),
+    ...decoder.push({
+      type: 'end',
+      stopReason: 'EndTurn',
+      sessionId: '22222222-2222-4222-8222-222222222222',
+    }),
+  ];
+
+  assert.deepEqual(
+    updates.filter(update => update.type === 'textDelta').map(update => update.text),
+    ['GROK_', 'DONE'],
+  );
+  assert.ok(updates.some(update => update.type === 'status' && update.status === 'reasoning'));
+  assert.ok(updates.some(update => (
+    update.type === 'messageFinished' && update.stopReason === 'end_turn'
+  )));
+  assert.ok(updates.some(update => (
+    update.type === 'result'
+    && update.sessionId === '22222222-2222-4222-8222-222222222222'
+    && !update.isError
+  )));
+});
+
+test('Grok stream decoder surfaces structured CLI errors', () => {
+  const updates = new GrokStreamDecoder().push({
+    type: 'error',
+    message: 'Authenticate with grok login',
+  });
+  assert.deepEqual(updates, [{
+    type: 'result',
+    result: '',
+    sessionId: null,
+    isError: true,
+    errorMessage: 'Authenticate with grok login',
+    durationMs: null,
+  }]);
+});
 
 test('Claude stream decoder emits incremental text without duplicating the assistant snapshot', () => {
   const decoder = new ClaudeStreamDecoder();

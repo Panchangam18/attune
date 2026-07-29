@@ -159,9 +159,43 @@ function ensureClaudeCodexProxyEnvironment(
   return {
     ...process.env,
     ATTUNE_CLAUDE_CLI_PATH: resolveClaudeCliPath(),
+    ATTUNE_GROK_CLI_PATH: resolveExternalCliPath(
+      'ATTUNE_GROK_CLI_PATH',
+      'grok',
+      [join(homedir(), '.local', 'bin', 'grok'), '/opt/homebrew/bin/grok', '/usr/local/bin/grok'],
+    ),
+    ATTUNE_CURSOR_CLI_PATH: resolveExternalCliPath(
+      'ATTUNE_CURSOR_CLI_PATH',
+      'cursor-agent',
+      [
+        join(homedir(), '.local', 'bin', 'cursor-agent'),
+        join(homedir(), '.cursor', 'bin', 'cursor-agent'),
+        '/opt/homebrew/bin/cursor-agent',
+        '/usr/local/bin/cursor-agent',
+      ],
+    ),
+    ATTUNE_COPILOT_CLI_PATH: resolveExternalCliPath(
+      'ATTUNE_COPILOT_CLI_PATH',
+      'copilot',
+      [join(homedir(), '.local', 'bin', 'copilot'), '/opt/homebrew/bin/copilot', '/usr/local/bin/copilot'],
+    ),
     ATTUNE_REAL_CODEX_CLI_PATH: realCodexPath,
     CODEX_CLI_PATH: proxyPath,
   };
+}
+
+function resolveExternalCliPath(
+  environmentKey: string,
+  command: string,
+  extraCandidates: string[],
+  environment: NodeJS.ProcessEnv = process.env,
+): string {
+  if (environment[environmentKey]) return environment[environmentKey]!;
+  const candidates = [
+    ...(environment.PATH ?? '').split(delimiter).filter(Boolean).map(path => join(path, command)),
+    ...extraCandidates,
+  ];
+  return candidates.find(candidate => existsSync(candidate)) ?? command;
 }
 
 export function resolveClaudeCliPath(

@@ -347,6 +347,259 @@ export class ClaudeStreamDecoder {
   }
 }
 
+/**
+ * Decoder for Grok CLI's documented `streaming-json` headless format.
+ * Grok currently exposes response and reasoning deltas, but not its internal
+ * tool lifecycle, so those tools remain represented by the enclosing native
+ * provider item in the Codex UI.
+ */
+export class GrokStreamDecoder {
+  private readonly messageId = `grok-message-${Date.now()}`;
+
+  pushLine(line: string): ClaudeStreamUpdate[] {
+    const trimmed = line.trim();
+    if (!trimmed) return [];
+    try {
+      return this.push(JSON.parse(trimmed));
+    } catch {
+      return [];
+    }
+  }
+
+  push(value: unknown): ClaudeStreamUpdate[] {
+    const message = asRecord(value);
+    if (!message) return [];
+    const type = text(message.type);
+    if (type === 'text') {
+      const delta = text(message.data) ?? '';
+      return delta ? [{ type: 'textDelta', messageId: this.messageId, text: delta }] : [];
+    }
+    if (type === 'thought') {
+      return [{ type: 'status', status: 'reasoning' }];
+    }
+    if (type === 'auto_compact_start') {
+      return [{ type: 'status', status: 'compacting' }];
+    }
+    if (type === 'max_turns_reached') {
+      return [{ type: 'status', status: 'maximum turns reached' }];
+    }
+    if (type === 'error') {
+      const errorMessage = text(message.message) ?? 'Grok CLI returned an error.';
+      return [{
+        type: 'result',
+        result: '',
+        sessionId: text(message.sessionId),
+        isError: true,
+        errorMessage,
+        durationMs: null,
+      }];
+    }
+    if (type === 'end') {
+      return [
+        {
+          type: 'messageFinished',
+          messageId: this.messageId,
+          stopReason: text(message.stopReason) === 'EndTurn' ? 'end_turn' : text(message.stopReason),
+        },
+        {
+          type: 'result',
+          result: '',
+          sessionId: text(message.sessionId),
+          isError: false,
+          errorMessage: null,
+          durationMs: null,
+        },
+      ];
+    }
+    return [];
+  }
+}
+
+/** Decoder for Cursor Agent CLI's documented `stream-json` event envelope. */
+export class CursorStreamDecoder {
+  private readonly messageId = `cursor-message-${Date.now()}`;
+
+  pushLine(line: string): ClaudeStreamUpdate[] {
+    const trimmed = line.trim();
+    if (!trimmed) return [];
+    try {
+      return this.push(JSON.parse(trimmed));
+    } catch {
+      return [];
+    }
+  }
+
+  push(value: unknown): ClaudeStreamUpdate[] {
+    const message = asRecord(value);
+    if (!message) return [];
+    const sessionId = text(message.session_id);
+    const updates: ClaudeStreamUpdate[] = sessionId
+      ? [{ type: 'session', sessionId }]
+      : [];
+    const type = text(message.type);
+    if (type === 'assistant') {
+      const content = asRecord(message.message)?.content;
+      if (!Array.isArray(content)) return updates;
+      for (const value of content) {
+        const block = asRecord(value);
+        if (block?.type === 'text' && typeof block.text === 'string' && block.text) {
+          updates.push({ type: 'textDelta', messageId: this.messageId, text: block.text });
+        }
+      }
+      return updates;
+    }
+    if (type === 'thinking') {
+      updates.push({ type: 'status', status: 'reasoning' });
+      return updates;
+    }
+    if (type === 'tool_call') {
+      const callId = text(message.call_id);
+      const envelope = asRecord(message.tool_call);
+      const entry = envelope ? Object.entries(envelope)[0] : null;
+      const detail = asRecord(entry?.[1]);
+      if (!callId || !entry) return updates;
+      const name = cursorToolName(entry[0]);
+      const input = asRecord(detail?.args) ?? {};
+      if (message.subtype === 'started') {
+        updates.push({ type: 'toolStarted', call: { id: callId, name, input } });
+      } else if (message.subtype === 'completed') {
+        const result = asRecord(detail?.result);
+        const failure = result ? asRecord(result.failure) ?? asRecord(result.error) : null;
+        updates.push({
+          type: 'toolFinished',
+          toolUseId: callId,
+          output: printable(failure ?? asRecord(result?.success) ?? result) ?? '',
+          isError: Boolean(failure),
+        });
+      }
+      return updates;
+    }
+    if (type === 'result') {
+      const isError = message.is_error === true || text(message.subtype) !== 'success';
+      updates.push(
+        { type: 'messageFinished', messageId: this.messageId, stopReason: 'end_turn' },
+        {
+          type: 'result',
+          result: printable(message.result) ?? '',
+          sessionId,
+          isError,
+          errorMessage: isError ? text(message.error) ?? printable(message.result) : null,
+          durationMs: typeof message.duration_ms === 'number' ? message.duration_ms : null,
+        },
+      );
+    }
+    return updates;
+  }
+}
+
+/** Decoder for GitHub Copilot CLI's JSONL session-event stream. */
+export class CopilotStreamDecoder {
+  private messageId = `copilot-message-${Date.now()}`;
+
+  pushLine(line: string): ClaudeStreamUpdate[] {
+    const trimmed = line.trim();
+    if (!trimmed) return [];
+    try {
+      return this.push(JSON.parse(trimmed));
+    } catch {
+      return [];
+    }
+  }
+
+  push(value: unknown): ClaudeStreamUpdate[] {
+    const message = asRecord(value);
+    if (!message) return [];
+    const type = text(message.type);
+    const data = asRecord(message.data);
+    if (type === 'assistant.message_start') {
+      this.messageId = text(data?.messageId) ?? this.messageId;
+      return [];
+    }
+    if (type === 'assistant.message_delta') {
+      const delta = text(data?.deltaContent) ?? '';
+      return delta ? [{ type: 'textDelta', messageId: this.messageId, text: delta }] : [];
+    }
+    if (type === 'assistant.reasoning' || type === 'model.call_start') {
+      return [{ type: 'status', status: 'reasoning' }];
+    }
+    if (type === 'tool.execution_start') {
+      const toolUseId = text(data?.toolCallId);
+      const toolName = text(data?.toolName);
+      if (!toolUseId || !toolName) return [];
+      return [{
+        type: 'toolStarted',
+        call: {
+          id: toolUseId,
+          name: copilotToolName(toolName),
+          input: asRecord(data?.arguments) ?? {},
+        },
+      }];
+    }
+    if (type === 'tool.execution_progress' || type === 'tool.execution_partial_result') {
+      const toolUseId = text(data?.toolCallId);
+      const progress = printable(data?.message) ?? printable(data?.result);
+      return toolUseId && progress
+        ? [{ type: 'toolProgress', toolUseId, message: progress }]
+        : [];
+    }
+    if (type === 'tool.execution_complete') {
+      const toolUseId = text(data?.toolCallId);
+      if (!toolUseId) return [];
+      return [{
+        type: 'toolFinished',
+        toolUseId,
+        output: printable(data?.result) ?? printable(data?.error) ?? '',
+        isError: data?.success !== true,
+      }];
+    }
+    if (type === 'session.error') {
+      return [{
+        type: 'result',
+        result: '',
+        sessionId: null,
+        isError: true,
+        errorMessage: text(data?.message) ?? printable(data) ?? 'GitHub Copilot CLI returned an error.',
+        durationMs: null,
+      }];
+    }
+    if (type === 'result') {
+      const exitCode = typeof message.exitCode === 'number' ? message.exitCode : 0;
+      return [
+        { type: 'messageFinished', messageId: this.messageId, stopReason: 'end_turn' },
+        {
+          type: 'result',
+          result: '',
+          sessionId: text(message.sessionId),
+          isError: exitCode !== 0,
+          errorMessage: exitCode === 0 ? null : `GitHub Copilot CLI exited with status ${exitCode}.`,
+          durationMs: null,
+        },
+      ];
+    }
+    return [];
+  }
+}
+
+function cursorToolName(value: string): string {
+  const normalized = value.replace(/ToolCall$/, '').toLowerCase();
+  if (normalized === 'read') return 'Read';
+  if (normalized === 'write') return 'Write';
+  if (normalized === 'edit') return 'Edit';
+  if (normalized === 'shell' || normalized === 'terminal') return 'Bash';
+  if (normalized === 'grep' || normalized === 'search') return 'Grep';
+  return value.replace(/ToolCall$/, '') || 'CursorTool';
+}
+
+function copilotToolName(value: string): string {
+  const normalized = value.toLowerCase();
+  if (normalized === 'bash' || normalized === 'shell' || normalized === 'local_shell') return 'Bash';
+  if (normalized === 'view' || normalized === 'read' || normalized === 'read_file') return 'Read';
+  if (normalized === 'write' || normalized === 'write_file' || normalized === 'create') return 'Write';
+  if (normalized === 'edit' || normalized === 'apply_patch') return 'Edit';
+  if (normalized === 'grep' || normalized === 'search') return 'Grep';
+  return value;
+}
+
 export function createCodexToolItem(
   call: ClaudeToolCall,
   cwd: string,
