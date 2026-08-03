@@ -19,14 +19,41 @@ const STYLE_ELEMENT_ID = 'attune-custom-stylesheet';
 const WORKSPACE_SCRIPT_RE = /\/\*\s*@attune-script\s*\n([\s\S]*?)\n\s*@end-attune-script\s*\*\//g;
 const POLL_INTERVAL_MS = 500;
 const MAX_MISSED_POLLS = 120;
+const RUNTIME_STATE_VERIFY_INTERVAL_MS = 5000;
+const SESSION_HEARTBEAT_INTERVAL_MS = 5000;
 const INSPECTION_TTL_MS = 24 * 60 * 60 * 1000;
 const INSPECTION_TEMP_PREFIX = 'attune-inspect-';
+
+const WORKSPACE_SOURCE_HASH_KEY = '__attuneWorkspaceSourceHash';
+const WORKSPACE_STYLE_HASH_KEY = '__attuneWorkspaceStyleHash';
+const WORKSPACE_SCRIPT_HASH_KEY = '__attuneWorkspaceScriptHash';
+const WORKSPACE_BRIDGE_HASH_KEY = '__attuneWorkspaceBridgeHash';
 
 interface DebugTarget {
   type: string;
   title?: string;
   url?: string;
   webSocketDebuggerUrl?: string;
+}
+
+interface DevToolsCommandResult<T> {
+  id?: number;
+  result?: T;
+  error?: { message?: string };
+  method?: string;
+}
+
+interface RuntimeState {
+  sourceHash: string | null;
+  styleHash: string | null;
+  styleElementHash: string | null;
+  scriptHash: string | null;
+  bridgeHash: string | null;
+}
+
+export interface DevToolsCommandTransport {
+  send<T>(method: string, params?: Record<string, unknown>, timeoutMs?: number): Promise<T>;
+  close(): void;
 }
 
 export interface SessionRecord {
@@ -419,44 +446,349 @@ function cleanupExpiredInspections(): void {
 export async function runWatcher(configPath: string, port: number, sessionPath: string): Promise<void> {
   let stopped = false;
   let missedPolls = 0;
+  let lastPublishedStatus: SessionRecord['status'] | null = null;
+  let lastPublishedTargetCount = -1;
+  let lastPublishedAt = 0;
+  const targetSessions = new Map<string, TargetStylesheetSession>();
   const stopWorkspaceBridgeServer = startWorkspaceBridgeServer();
 
   const stop = () => {
     stopped = true;
+    for (const targetSession of targetSessions.values()) targetSession.close();
+    targetSessions.clear();
     stopWorkspaceBridgeServer();
   };
   process.once('SIGINT', stop);
   process.once('SIGTERM', stop);
 
-  while (!stopped) {
-    try {
-      const targets = await getDebugTargets(port);
-      const stylesheet = readStylesheet(configPath);
-      const pageTargets = targets.filter(target => target.type === 'page' && target.webSocketDebuggerUrl);
+  const publishSession = (status: SessionRecord['status'], targetCount: number) => {
+    const now = Date.now();
+    if (
+      status === lastPublishedStatus
+      && targetCount === lastPublishedTargetCount
+      && now - lastPublishedAt < SESSION_HEARTBEAT_INTERVAL_MS
+    ) return;
+    lastPublishedStatus = status;
+    lastPublishedTargetCount = targetCount;
+    lastPublishedAt = now;
+    updateSession(sessionPath, {
+      status,
+      targetCount,
+      updatedAt: new Date(now).toISOString(),
+    });
+  };
 
-      const workspaceBridge = readWorkspaceBridgeStore();
-      await Promise.all(pageTargets.map(target => injectStylesheet(target.webSocketDebuggerUrl!, stylesheet, workspaceBridge)));
-      missedPolls = 0;
-      updateSession(sessionPath, {
-        status: 'attached',
-        targetCount: pageTargets.length,
-        updatedAt: new Date().toISOString(),
-      });
-    } catch {
-      missedPolls += 1;
-      updateSession(sessionPath, {
-        status: 'waiting',
-        targetCount: 0,
-        updatedAt: new Date().toISOString(),
-      });
+  const getTargetSession = (webSocketUrl: string): TargetStylesheetSession => {
+    const existing = targetSessions.get(webSocketUrl);
+    if (existing) return existing;
+
+    let targetSession: TargetStylesheetSession | undefined;
+    const connection = new PersistentDevToolsConnection(
+      webSocketUrl,
+      () => targetSession?.invalidate(),
+      () => {
+        if (targetSession && targetSessions.get(webSocketUrl) === targetSession) {
+          targetSessions.delete(webSocketUrl);
+        }
+      },
+    );
+    targetSession = new TargetStylesheetSession(connection);
+    targetSessions.set(webSocketUrl, targetSession);
+    return targetSession;
+  };
+
+  try {
+    while (!stopped) {
+      try {
+        const targets = await getDebugTargets(port);
+        const stylesheet = readStylesheet(configPath);
+        const pageTargets = targets.filter(target => target.type === 'page' && target.webSocketDebuggerUrl);
+        const activeTargetUrls = new Set(pageTargets.map(target => target.webSocketDebuggerUrl!));
+
+        for (const [webSocketUrl, targetSession] of targetSessions) {
+          if (activeTargetUrls.has(webSocketUrl)) continue;
+          targetSession.close();
+          targetSessions.delete(webSocketUrl);
+        }
+
+        const workspaceBridge = readWorkspaceBridgeStore();
+        const syncResults = await Promise.allSettled(pageTargets.map(target => (
+          getTargetSession(target.webSocketDebuggerUrl!).sync(stylesheet, workspaceBridge)
+        )));
+        const attachedCount = syncResults.filter(result => result.status === 'fulfilled').length;
+        if (pageTargets.length > 0 && attachedCount === 0) {
+          throw new Error('Attune could not synchronize any renderer targets.');
+        }
+
+        missedPolls = 0;
+        publishSession('attached', attachedCount);
+      } catch {
+        missedPolls += 1;
+        publishSession('waiting', 0);
+      }
+
+      if (missedPolls >= MAX_MISSED_POLLS) {
+        rmSync(sessionPath, { force: true });
+        return;
+      }
+
+      await delay(POLL_INTERVAL_MS);
+    }
+  } finally {
+    stop();
+  }
+}
+
+class PersistentDevToolsConnection implements DevToolsCommandTransport {
+  private socket: WebSocket | null = null;
+  private connecting: Promise<void> | null = null;
+  private nextCommandId = 0;
+  private closed = false;
+  private readonly pending = new Map<number, {
+    resolve: (value: unknown) => void;
+    reject: (error: Error) => void;
+    timeout: ReturnType<typeof setTimeout>;
+  }>();
+
+  constructor(
+    private readonly webSocketUrl: string,
+    private readonly onInvalidated: () => void,
+    private readonly onClosed: () => void,
+  ) {}
+
+  async send<T>(
+    method: string,
+    params: Record<string, unknown> = {},
+    timeoutMs = 3000,
+  ): Promise<T> {
+    await this.ensureConnected();
+    if (!this.socket || this.socket.readyState !== 1) {
+      throw new Error('DevTools connection is not open.');
     }
 
-    if (missedPolls >= MAX_MISSED_POLLS) {
-      rmSync(sessionPath, { force: true });
+    const id = ++this.nextCommandId;
+    return await new Promise<T>((resolve, reject) => {
+      const timeout = setTimeout(() => {
+        this.pending.delete(id);
+        const error = new Error(`${method} timed out`);
+        reject(error);
+        this.closeWithError(error);
+      }, timeoutMs);
+      this.pending.set(id, {
+        resolve: value => resolve(value as T),
+        reject,
+        timeout,
+      });
+      try {
+        this.socket!.send(JSON.stringify({ id, method, params }));
+      } catch (error) {
+        clearTimeout(timeout);
+        this.pending.delete(id);
+        const sendError = error instanceof Error ? error : new Error(String(error));
+        reject(sendError);
+        this.closeWithError(sendError);
+      }
+    });
+  }
+
+  close(): void {
+    this.closeWithError(new Error('DevTools connection closed.'));
+  }
+
+  private async ensureConnected(): Promise<void> {
+    if (this.closed) throw new Error('DevTools connection is closed.');
+    if (this.socket?.readyState === 1) return;
+    if (this.connecting) return await this.connecting;
+
+    const socket = new WebSocket(this.webSocketUrl);
+    this.socket = socket;
+    socket.addEventListener('message', event => this.handleMessage(event));
+    socket.addEventListener('close', () => {
+      this.handleSocketClosed(socket, new Error('DevTools connection closed.'));
+    }, { once: true });
+
+    const connecting = new Promise<void>((resolve, reject) => {
+      const timeout = setTimeout(() => reject(new Error('DevTools connection timed out')), 3000);
+      socket.addEventListener('open', () => {
+        clearTimeout(timeout);
+        resolve();
+      }, { once: true });
+      socket.addEventListener('error', () => {
+        clearTimeout(timeout);
+        reject(new Error('DevTools connection failed'));
+      }, { once: true });
+    });
+    this.connecting = connecting;
+    try {
+      await connecting;
+    } catch (error) {
+      try {
+        socket.close();
+      } catch {
+        // Closing a socket that failed during connection is best effort.
+      }
+      this.handleSocketClosed(
+        socket,
+        error instanceof Error ? error : new Error(String(error)),
+      );
+      throw error;
+    } finally {
+      if (this.connecting === connecting) this.connecting = null;
+    }
+  }
+
+  private handleMessage(event: MessageEvent): void {
+    let message: DevToolsCommandResult<unknown>;
+    try {
+      message = JSON.parse(String(event.data)) as DevToolsCommandResult<unknown>;
+    } catch {
       return;
     }
 
-    await delay(POLL_INTERVAL_MS);
+    if (typeof message.id === 'number') {
+      const pending = this.pending.get(message.id);
+      if (!pending) return;
+      this.pending.delete(message.id);
+      clearTimeout(pending.timeout);
+      if (message.error) {
+        pending.reject(new Error(message.error.message || 'DevTools command failed'));
+      } else {
+        pending.resolve(message.result);
+      }
+      return;
+    }
+
+    if (
+      message.method === 'Runtime.executionContextsCleared'
+      || message.method === 'Page.frameNavigated'
+    ) this.onInvalidated();
+  }
+
+  private handleSocketClosed(socket: WebSocket, error: Error): void {
+    if (this.socket !== socket) return;
+    this.socket = null;
+    this.closed = true;
+    for (const pending of this.pending.values()) {
+      clearTimeout(pending.timeout);
+      pending.reject(error);
+    }
+    this.pending.clear();
+    this.onClosed();
+  }
+
+  private closeWithError(error: Error): void {
+    if (this.closed) return;
+    this.closed = true;
+    const socket = this.socket;
+    this.socket = null;
+    for (const pending of this.pending.values()) {
+      clearTimeout(pending.timeout);
+      pending.reject(error);
+    }
+    this.pending.clear();
+    try {
+      socket?.close();
+    } catch {
+      // A renderer that already disappeared needs no further cleanup.
+    }
+    this.onClosed();
+  }
+}
+
+export class TargetStylesheetSession {
+  private initialized = false;
+  private appliedSourceHash: string | null = null;
+  private appliedBridgeHash: string | null = null;
+  private invalidationVersion = 0;
+  private lastVerifiedAt = 0;
+
+  constructor(private readonly transport: DevToolsCommandTransport) {}
+
+  async sync(
+    stylesheet: string,
+    workspaceBridge: Record<string, unknown>,
+    now = Date.now(),
+  ): Promise<void> {
+    await this.initialize();
+    const expected = getWorkspaceRuntimeState(stylesheet, workspaceBridge);
+
+    if (this.appliedSourceHash !== expected.sourceHash) {
+      await this.applySource(stylesheet, workspaceBridge, expected, now);
+      return;
+    }
+    if (this.appliedBridgeHash !== expected.bridgeHash) {
+      await this.applyBridge(workspaceBridge, expected.bridgeHash!, now);
+      return;
+    }
+    if (now - this.lastVerifiedAt < RUNTIME_STATE_VERIFY_INTERVAL_MS) return;
+
+    const remote = await this.readRuntimeState();
+    this.lastVerifiedAt = now;
+    if (!runtimeStatesMatch(remote, expected)) {
+      await this.applySource(stylesheet, workspaceBridge, expected, now);
+    }
+  }
+
+  invalidate(): void {
+    this.invalidationVersion += 1;
+    this.appliedSourceHash = null;
+    this.appliedBridgeHash = null;
+    this.lastVerifiedAt = 0;
+  }
+
+  close(): void {
+    this.transport.close();
+  }
+
+  private async initialize(): Promise<void> {
+    if (this.initialized) return;
+    await this.transport.send('Page.enable');
+    await this.transport.send('Page.setBypassCSP', { enabled: true });
+    this.initialized = true;
+  }
+
+  private async applySource(
+    stylesheet: string,
+    workspaceBridge: Record<string, unknown>,
+    expected: RuntimeState,
+    now: number,
+  ): Promise<void> {
+    const invalidationVersion = this.invalidationVersion;
+    const response = await this.transport.send<{ exceptionDetails?: unknown }>('Runtime.evaluate', {
+      expression: buildStyleInjectionExpression(stylesheet, workspaceBridge),
+      returnByValue: true,
+    });
+    if (response.exceptionDetails) throw new Error('Attune source update failed in the renderer.');
+    if (invalidationVersion !== this.invalidationVersion) return;
+    this.appliedSourceHash = expected.sourceHash;
+    this.appliedBridgeHash = expected.bridgeHash;
+    this.lastVerifiedAt = now;
+  }
+
+  private async applyBridge(
+    workspaceBridge: Record<string, unknown>,
+    bridgeHash: string,
+    now: number,
+  ): Promise<void> {
+    const invalidationVersion = this.invalidationVersion;
+    const response = await this.transport.send<{ exceptionDetails?: unknown }>('Runtime.evaluate', {
+      expression: buildWorkspaceBridgeUpdateExpression(workspaceBridge),
+      returnByValue: true,
+    });
+    if (response.exceptionDetails) throw new Error('Attune bridge update failed in the renderer.');
+    if (invalidationVersion !== this.invalidationVersion) return;
+    this.appliedBridgeHash = bridgeHash;
+    this.lastVerifiedAt = now;
+  }
+
+  private async readRuntimeState(): Promise<RuntimeState | null> {
+    const response = await this.transport.send<{
+      result?: { value?: RuntimeState };
+    }>('Runtime.evaluate', {
+      expression: buildRuntimeStateProbeExpression(),
+      returnByValue: true,
+    });
+    return response.result?.value ?? null;
   }
 }
 
@@ -718,45 +1050,58 @@ function scheduleCodexTaskOpen(threadId: string): void {
 
 export function buildStyleInjectionExpression(css: string, workspaceBridge: Record<string, unknown> = {}): string {
   const workspaceSource = splitWorkspaceSource(css);
-  const hash = createHash('sha256').update(css).digest('hex');
+  const state = getWorkspaceRuntimeState(css, workspaceBridge);
   const safeCss = JSON.stringify(workspaceSource.css);
-  const safeHash = JSON.stringify(hash);
+  const safeSourceHash = JSON.stringify(state.sourceHash);
+  const safeStyleHash = JSON.stringify(state.styleHash);
+  const safeScriptHash = JSON.stringify(state.scriptHash);
+  const safeBridgeHash = JSON.stringify(state.bridgeHash);
   const safeId = JSON.stringify(STYLE_ELEMENT_ID);
   const safeScript = JSON.stringify(workspaceSource.script);
   const safeWorkspaceBridge = JSON.stringify(workspaceBridge);
+  const safeSourceHashKey = JSON.stringify(WORKSPACE_SOURCE_HASH_KEY);
+  const safeStyleHashKey = JSON.stringify(WORKSPACE_STYLE_HASH_KEY);
+  const safeScriptHashKey = JSON.stringify(WORKSPACE_SCRIPT_HASH_KEY);
+  const safeBridgeHashKey = JSON.stringify(WORKSPACE_BRIDGE_HASH_KEY);
 
   return `(() => {
   const id = ${safeId};
-  const hash = ${safeHash};
+  const sourceHash = ${safeSourceHash};
+  const styleHash = ${safeStyleHash};
+  const scriptHash = ${safeScriptHash};
+  const bridgeHash = ${safeBridgeHash};
   const css = ${safeCss};
   const script = ${safeScript};
   window.__attuneWorkspaceBridge = ${safeWorkspaceBridge};
   const cleanupKey = '__attuneWorkspaceScriptCleanup';
-  const scriptHashKey = '__attuneWorkspaceScriptHash';
+  const sourceHashKey = ${safeSourceHashKey};
+  const styleHashKey = ${safeStyleHashKey};
+  const scriptHashKey = ${safeScriptHashKey};
+  const bridgeHashKey = ${safeBridgeHashKey};
   const current = document.getElementById(id);
-  const sourceChanged = window[scriptHashKey] !== hash;
+  const scriptChanged = window[scriptHashKey] !== scriptHash;
   let status = 'current';
   if (!css) {
     current?.remove();
     status = 'removed';
-  } else if (current?.dataset.attuneHash !== hash) {
+  } else if (current?.dataset.attuneHash !== styleHash) {
     const style = current || document.createElement('style');
     style.id = id;
-    style.dataset.attuneHash = hash;
+    style.dataset.attuneHash = styleHash;
     style.textContent = css;
     if (!current) document.head.append(style);
     status = 'applied';
   }
-  if (sourceChanged) {
+  if (scriptChanged) {
     try {
       window[cleanupKey]?.();
     } catch (error) {
       console.warn('[attune] workspace script cleanup failed', error);
     }
     window[cleanupKey] = undefined;
-    window[scriptHashKey] = hash;
+    window[scriptHashKey] = scriptHash;
   }
-  if (script && sourceChanged) {
+  if (script && scriptChanged) {
     window.__attuneRegisterCleanup = cleanup => {
       if (typeof cleanup !== 'function') return;
       const previousCleanup = window[cleanupKey];
@@ -774,8 +1119,68 @@ export function buildStyleInjectionExpression(css: string, workspaceBridge: Reco
       console.warn('[attune] workspace script failed', error);
     }
   }
+  window[sourceHashKey] = sourceHash;
+  window[styleHashKey] = styleHash;
+  window[bridgeHashKey] = bridgeHash;
   return status;
 })()`;
+}
+
+export function buildWorkspaceBridgeUpdateExpression(
+  workspaceBridge: Record<string, unknown>,
+): string {
+  const safeWorkspaceBridge = JSON.stringify(workspaceBridge);
+  const safeBridgeHash = JSON.stringify(hashValue(JSON.stringify(workspaceBridge)));
+  const safeBridgeHashKey = JSON.stringify(WORKSPACE_BRIDGE_HASH_KEY);
+  return `(() => {
+  window.__attuneWorkspaceBridge = ${safeWorkspaceBridge};
+  window[${safeBridgeHashKey}] = ${safeBridgeHash};
+  return 'updated';
+})()`;
+}
+
+export function buildRuntimeStateProbeExpression(): string {
+  const safeId = JSON.stringify(STYLE_ELEMENT_ID);
+  const safeSourceHashKey = JSON.stringify(WORKSPACE_SOURCE_HASH_KEY);
+  const safeStyleHashKey = JSON.stringify(WORKSPACE_STYLE_HASH_KEY);
+  const safeScriptHashKey = JSON.stringify(WORKSPACE_SCRIPT_HASH_KEY);
+  const safeBridgeHashKey = JSON.stringify(WORKSPACE_BRIDGE_HASH_KEY);
+  return `(() => ({
+  sourceHash: window[${safeSourceHashKey}] || null,
+  styleHash: window[${safeStyleHashKey}] || null,
+  styleElementHash: document.getElementById(${safeId})?.dataset.attuneHash || null,
+  scriptHash: window[${safeScriptHashKey}] || null,
+  bridgeHash: window[${safeBridgeHashKey}] || null,
+}))()`;
+}
+
+function getWorkspaceRuntimeState(
+  source: string,
+  workspaceBridge: Record<string, unknown>,
+): RuntimeState {
+  const workspaceSource = splitWorkspaceSource(source);
+  return {
+    sourceHash: hashValue(source),
+    styleHash: hashValue(workspaceSource.css),
+    styleElementHash: workspaceSource.css ? hashValue(workspaceSource.css) : null,
+    scriptHash: hashValue(workspaceSource.script),
+    bridgeHash: hashValue(JSON.stringify(workspaceBridge)),
+  };
+}
+
+function runtimeStatesMatch(actual: RuntimeState | null, expected: RuntimeState): boolean {
+  return Boolean(
+    actual
+    && actual.sourceHash === expected.sourceHash
+    && actual.styleHash === expected.styleHash
+    && actual.styleElementHash === expected.styleElementHash
+    && actual.scriptHash === expected.scriptHash
+    && actual.bridgeHash === expected.bridgeHash
+  );
+}
+
+function hashValue(value: string): string {
+  return createHash('sha256').update(value).digest('hex');
 }
 
 export function splitWorkspaceSource(source: string): { css: string; script: string } {
@@ -958,66 +1363,6 @@ function slugify(value: string): string {
   return value.toLowerCase()
     .replace(/[^a-z0-9]+/g, '-')
     .replace(/^-|-$/g, '') || 'app';
-}
-
-async function injectStylesheet(
-  webSocketUrl: string,
-  css: string,
-  workspaceBridge: Record<string, unknown>,
-): Promise<void> {
-  const socket = new WebSocket(webSocketUrl);
-  await new Promise<void>((resolve, reject) => {
-    const timeout = setTimeout(() => reject(new Error('DevTools connection timed out')), 3000);
-    socket.addEventListener('open', () => {
-      clearTimeout(timeout);
-      resolve();
-    }, { once: true });
-    socket.addEventListener('error', () => {
-      clearTimeout(timeout);
-      reject(new Error('DevTools connection failed'));
-    }, { once: true });
-  });
-
-  try {
-    await new Promise<void>((resolve, reject) => {
-      const timeout = setTimeout(() => reject(new Error('Style injection timed out')), 3000);
-      socket.addEventListener('message', event => {
-        const message = JSON.parse(String(event.data)) as { id?: number; error?: unknown };
-        if (message.id === 1) {
-          if (message.error) {
-            clearTimeout(timeout);
-            reject(new Error('DevTools rejected CSP bypass'));
-            return;
-          }
-          socket.send(JSON.stringify({
-            id: 2,
-            method: 'Runtime.evaluate',
-            params: {
-              expression: buildStyleInjectionExpression(css, workspaceBridge),
-              returnByValue: true,
-            },
-          }));
-          return;
-        }
-        if (message.id !== 2) return;
-        clearTimeout(timeout);
-        if (message.error) {
-          reject(new Error('DevTools rejected style injection'));
-          return;
-        }
-        resolve();
-      });
-      socket.send(JSON.stringify({
-        id: 1,
-        method: 'Page.setBypassCSP',
-        params: {
-          enabled: true,
-        },
-      }));
-    });
-  } finally {
-    socket.close();
-  }
 }
 
 function getSessionPath(appId: string): string {

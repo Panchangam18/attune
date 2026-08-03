@@ -13,6 +13,7 @@ import {
   resolveClaudeCliPath,
   shouldEnableClaudeCodexProxy,
   splitWorkspaceSource,
+  TargetStylesheetSession,
 } from '../dist/session.js';
 
 test('Claude Codex proxy is gated by both the ChatGPT bundle and Attune launch flag', () => {
@@ -156,6 +157,94 @@ window.__attuneRegisterCleanup?.(() => {
   assert.equal(window.__attuneScriptRuns, 1);
   assert.equal(vm.runInNewContext(buildStyleInjectionExpression('body { color: plum; }'), { document, window, console }), 'applied');
   assert.equal(window.__attuneScriptCleanups, 1);
+});
+
+test('resident target sessions send only source, bridge, and recovery deltas', async () => {
+  const createRenderer = () => {
+    const styles = new Map();
+    const document = {
+      head: {
+        append(style) {
+          styles.set(style.id, style);
+        },
+      },
+      createElement() {
+        return {
+          dataset: {},
+          remove() {
+            styles.delete(this.id);
+          },
+        };
+      },
+      getElementById(id) {
+        return styles.get(id) || null;
+      },
+    };
+    return { styles, context: { document, window: {}, console } };
+  };
+
+  let renderer = createRenderer();
+  const commands = [];
+  const transport = {
+    async send(method, params = {}) {
+      commands.push({ method, params });
+      if (method !== 'Runtime.evaluate') return {};
+      const value = vm.runInNewContext(params.expression, renderer.context);
+      return { result: { value } };
+    },
+    close() {},
+  };
+  const session = new TargetStylesheetSession(transport);
+  const script = `window.__residentRuns = (window.__residentRuns || 0) + 1;
+window.__attuneRegisterCleanup?.(() => {
+  window.__residentCleanups = (window.__residentCleanups || 0) + 1;
+});`;
+  const source = `body { color: teal; }
+/* @attune-script
+${script}
+@end-attune-script */`;
+
+  await session.sync(source, { todos: 1 }, 1_000);
+  assert.deepEqual(commands.slice(0, 2).map(command => command.method), [
+    'Page.enable',
+    'Page.setBypassCSP',
+  ]);
+  assert.equal(commands.filter(command => command.method === 'Runtime.evaluate').length, 1);
+  assert.equal(renderer.context.window.__residentRuns, 1);
+
+  await session.sync(source, { todos: 1 }, 1_500);
+  assert.equal(commands.filter(command => command.method === 'Runtime.evaluate').length, 1);
+
+  session.invalidate();
+  await session.sync(source, { todos: 1 }, 1_750);
+  assert.equal(commands.filter(command => command.method === 'Runtime.evaluate').length, 2);
+  assert.equal(renderer.context.window.__residentRuns, 1);
+
+  await session.sync(source, { todos: 2 }, 2_000);
+  const bridgeUpdate = commands.at(-1);
+  assert.equal(bridgeUpdate.method, 'Runtime.evaluate');
+  assert.match(bridgeUpdate.params.expression, /return 'updated'/);
+  assert.doesNotMatch(bridgeUpdate.params.expression, /color: teal/);
+  assert.equal(renderer.context.window.__attuneWorkspaceBridge.todos, 2);
+  assert.equal(renderer.context.window.__residentRuns, 1);
+
+  const recolored = source.replace('color: teal', 'color: plum');
+  await session.sync(recolored, { todos: 2 }, 2_500);
+  assert.equal(renderer.styles.get('attune-custom-stylesheet').textContent, 'body { color: plum; }');
+  assert.equal(renderer.context.window.__residentRuns, 1);
+  assert.equal(renderer.context.window.__residentCleanups, undefined);
+
+  await session.sync(recolored, { todos: 2 }, 8_000);
+  assert.equal(commands.at(-1).method, 'Runtime.evaluate');
+  assert.match(commands.at(-1).params.expression, /styleElementHash/);
+
+  renderer = createRenderer();
+  const evaluationsBeforeRecovery = commands.filter(command => command.method === 'Runtime.evaluate').length;
+  await session.sync(recolored, { todos: 2 }, 14_000);
+  const evaluationsAfterRecovery = commands.filter(command => command.method === 'Runtime.evaluate').length;
+  assert.equal(evaluationsAfterRecovery, evaluationsBeforeRecovery + 2);
+  assert.equal(renderer.styles.get('attune-custom-stylesheet').textContent, 'body { color: plum; }');
+  assert.equal(renderer.context.window.__residentRuns, 1);
 });
 
 test('stylesheet reads live source edits and falls back to the saved CSS', async (t) => {
