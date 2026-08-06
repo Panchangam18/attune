@@ -149,6 +149,7 @@ window.__attuneRegisterCleanup?.(() => {
   assert.deepEqual(splitWorkspaceSource(source), {
     css: 'body { color: teal; }',
     script: 'window.__attuneScriptRuns = (window.__attuneScriptRuns || 0) + 1;\nwindow.__attuneRegisterCleanup?.(() => {\n  window.__attuneScriptCleanups = (window.__attuneScriptCleanups || 0) + 1;\n});',
+    bindingSets: [],
   });
   assert.equal(vm.runInNewContext(buildStyleInjectionExpression(source), { document, window, console }), 'applied');
   assert.equal(styles.get('attune-custom-stylesheet').textContent, 'body { color: teal; }');
@@ -245,6 +246,126 @@ ${script}
   assert.equal(evaluationsAfterRecovery, evaluationsBeforeRecovery + 2);
   assert.equal(renderer.styles.get('attune-custom-stylesheet').textContent, 'body { color: plum; }');
   assert.equal(renderer.context.window.__residentRuns, 1);
+});
+
+test('host bindings are extracted and mapped before attunement scripts run', () => {
+  const source = `/* @attune-bindings
+{"schemaVersion":1,"attunementId":"codex-multi-chat","appName":"Codex","bindings":[{"name":"main","role":"codex.primaryChat","required":true},{"name":"header","role":"codex.chatHeader","required":false}]}
+@end-attune-bindings */
+
+[data-attune-host-roles~="codex.primaryChat"] { display: flex; }
+
+/* @attune-script
+window.__mappedBeforeScript = Boolean(window.__attuneHost?.resolve('codex.primaryChat'));
+@end-attune-script */`;
+  const attributes = new Map();
+  const header = {
+    isConnected: true,
+    setAttribute(name, value) { attributes.set(`header:${name}`, value); },
+    removeAttribute(name) { attributes.delete(`header:${name}`); },
+    getBoundingClientRect() { return { width: 600, height: 40 }; },
+    querySelector() { return null; },
+    hasAttribute() { return false; },
+    classList: { contains() { return false; } },
+    tagName: 'HEADER',
+  };
+  const action = {
+    isConnected: true,
+    getBoundingClientRect() { return { width: 28, height: 28 }; },
+    closest(selector) { return selector === 'header' ? header : null; },
+  };
+  const main = {
+    isConnected: true,
+    tagName: 'MAIN',
+    classList: { contains(name) { return name === 'main-surface'; } },
+    hasAttribute(name) { return name === 'data-app-shell-main-surface'; },
+    querySelector(selector) {
+      if (selector === '[data-codex-composer-root]') return {};
+      if (selector === '[data-app-action-timeline-scroll]') return {};
+      if (selector === 'button[aria-label="Chat actions"]') return action;
+      return null;
+    },
+    setAttribute(name, value) { attributes.set(`main:${name}`, value); },
+    removeAttribute(name) { attributes.delete(`main:${name}`); },
+    getBoundingClientRect() { return { width: 800, height: 600 }; },
+  };
+  const styles = new Map();
+  const document = {
+    documentElement: {},
+    head: { append(style) { styles.set(style.id, style); } },
+    createElement() {
+      return {
+        dataset: {},
+        remove() { styles.delete(this.id); },
+      };
+    },
+    getElementById(id) { return styles.get(id) || null; },
+    querySelector(selector) {
+      if (selector === '.app-header-tint') return null;
+      return null;
+    },
+    querySelectorAll(selector) {
+      if (selector === 'main') return [main];
+      if (selector === 'button[aria-label="Chat actions"]') return [action];
+      return [];
+    },
+  };
+  const window = {
+    dispatchEvent() {},
+  };
+  class MutationObserver {
+    observe() {}
+    disconnect() {}
+  }
+  class CustomEvent {
+    constructor(type, init) {
+      this.type = type;
+      this.detail = init.detail;
+    }
+  }
+  const context = {
+    document,
+    window,
+    console,
+    MutationObserver,
+    CustomEvent,
+    getComputedStyle: () => ({ display: 'block', visibility: 'visible' }),
+    requestAnimationFrame: callback => { callback(); return 1; },
+    cancelAnimationFrame() {},
+  };
+
+  const parsed = splitWorkspaceSource(source);
+  assert.equal(parsed.bindingSets.length, 1);
+  assert.equal(parsed.bindingSets[0].bindings[0].role, 'codex.primaryChat');
+  assert.equal(vm.runInNewContext(buildStyleInjectionExpression(source), context), 'applied');
+  assert.equal(window.__mappedBeforeScript, true);
+  assert.equal(attributes.get('main:data-attune-host-roles'), 'codex.primaryChat');
+  assert.equal(attributes.get('header:data-attune-host-roles'), 'codex.chatHeader');
+  assert.equal(window.__attuneCompatibilityReports['codex-multi-chat'].status, 'compatible');
+});
+
+test('host mapper publishes semantic strategies for every supported attunement surface', () => {
+  const expression = buildStyleInjectionExpression('body { color: CanvasText; }');
+  for (const role of [
+    'codex.appShell',
+    'codex.sidebarThreads',
+    'codex.modelPicker',
+    'chatgpt.conversation',
+    'chatgpt.composer',
+    'chatgpt.attachmentMenu',
+    'linear.workspace',
+    'linear.issueList',
+    'linear.issueDetail',
+    'linear.statusControl',
+    'slack.workspace',
+    'slack.composer',
+    'slack.sendButton',
+    'cursor.workbench',
+    'cursor.titlebar',
+    'youtube.player',
+  ]) {
+    assert.match(expression, new RegExp(role.replace('.', '\\.')));
+  }
 });
 
 test('stylesheet reads live source edits and falls back to the saved CSS', async (t) => {

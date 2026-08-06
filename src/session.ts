@@ -17,6 +17,7 @@ const CLAUDE_BRIDGE_TOKEN_KEY = 'claude-code-token';
 const activeClaudeProcesses = new Map<string, ChildProcess>();
 const STYLE_ELEMENT_ID = 'attune-custom-stylesheet';
 const WORKSPACE_SCRIPT_RE = /\/\*\s*@attune-script\s*\n([\s\S]*?)\n\s*@end-attune-script\s*\*\//g;
+const WORKSPACE_BINDINGS_RE = /\/\*\s*@attune-bindings\s*\n([\s\S]*?)\n\s*@end-attune-bindings\s*\*\//g;
 const POLL_INTERVAL_MS = 500;
 const MAX_MISSED_POLLS = 120;
 const RUNTIME_STATE_VERIFY_INTERVAL_MS = 5000;
@@ -27,7 +28,10 @@ const INSPECTION_TEMP_PREFIX = 'attune-inspect-';
 const WORKSPACE_SOURCE_HASH_KEY = '__attuneWorkspaceSourceHash';
 const WORKSPACE_STYLE_HASH_KEY = '__attuneWorkspaceStyleHash';
 const WORKSPACE_SCRIPT_HASH_KEY = '__attuneWorkspaceScriptHash';
+const WORKSPACE_BINDINGS_HASH_KEY = '__attuneWorkspaceBindingsHash';
 const WORKSPACE_BRIDGE_HASH_KEY = '__attuneWorkspaceBridgeHash';
+const HOST_MAPPER_VERSION = 2;
+const HOST_MAPPER_VERSION_KEY = '__attuneHostMapperVersion';
 
 interface DebugTarget {
   type: string;
@@ -48,7 +52,9 @@ interface RuntimeState {
   styleHash: string | null;
   styleElementHash: string | null;
   scriptHash: string | null;
+  bindingsHash: string | null;
   bridgeHash: string | null;
+  mapperVersion: number | null;
 }
 
 export interface DevToolsCommandTransport {
@@ -102,6 +108,19 @@ export interface AppInspection {
   expiresAt: string | null;
   session: Pick<SessionRecord, 'status' | 'port' | 'targetCount'>;
   pages: PageInspection[];
+}
+
+export interface HostBinding {
+  name: string;
+  role: string;
+  required: boolean;
+}
+
+export interface HostBindingSet {
+  schemaVersion: number;
+  attunementId: string;
+  appName: string;
+  bindings: HostBinding[];
 }
 
 export async function launch(app: DiscoveredApp, cliPath: string): Promise<{ port: number }> {
@@ -1055,32 +1074,308 @@ export function buildStyleInjectionExpression(css: string, workspaceBridge: Reco
   const safeSourceHash = JSON.stringify(state.sourceHash);
   const safeStyleHash = JSON.stringify(state.styleHash);
   const safeScriptHash = JSON.stringify(state.scriptHash);
+  const safeBindingsHash = JSON.stringify(state.bindingsHash);
   const safeBridgeHash = JSON.stringify(state.bridgeHash);
   const safeId = JSON.stringify(STYLE_ELEMENT_ID);
   const safeScript = JSON.stringify(workspaceSource.script);
+  const safeBindingSets = JSON.stringify(workspaceSource.bindingSets);
   const safeWorkspaceBridge = JSON.stringify(workspaceBridge);
   const safeSourceHashKey = JSON.stringify(WORKSPACE_SOURCE_HASH_KEY);
   const safeStyleHashKey = JSON.stringify(WORKSPACE_STYLE_HASH_KEY);
   const safeScriptHashKey = JSON.stringify(WORKSPACE_SCRIPT_HASH_KEY);
+  const safeBindingsHashKey = JSON.stringify(WORKSPACE_BINDINGS_HASH_KEY);
   const safeBridgeHashKey = JSON.stringify(WORKSPACE_BRIDGE_HASH_KEY);
+  const safeMapperVersion = JSON.stringify(HOST_MAPPER_VERSION);
+  const safeMapperVersionKey = JSON.stringify(HOST_MAPPER_VERSION_KEY);
 
   return `(() => {
   const id = ${safeId};
   const sourceHash = ${safeSourceHash};
   const styleHash = ${safeStyleHash};
   const scriptHash = ${safeScriptHash};
+  const bindingsHash = ${safeBindingsHash};
   const bridgeHash = ${safeBridgeHash};
   const css = ${safeCss};
   const script = ${safeScript};
+  const bindingSets = ${safeBindingSets};
   window.__attuneWorkspaceBridge = ${safeWorkspaceBridge};
   const cleanupKey = '__attuneWorkspaceScriptCleanup';
   const sourceHashKey = ${safeSourceHashKey};
   const styleHashKey = ${safeStyleHashKey};
   const scriptHashKey = ${safeScriptHashKey};
+  const bindingsHashKey = ${safeBindingsHashKey};
   const bridgeHashKey = ${safeBridgeHashKey};
+  const mapperVersion = ${safeMapperVersion};
+  const mapperVersionKey = ${safeMapperVersionKey};
   const current = document.getElementById(id);
   const scriptChanged = window[scriptHashKey] !== scriptHash;
+  const bindingsChanged = window[bindingsHashKey] !== bindingsHash;
+  const mapperChanged = window[mapperVersionKey] !== mapperVersion;
+  const mapperKey = '__attuneHostMapper';
   let status = 'current';
+  if (bindingsChanged || mapperChanged) {
+    try {
+      window[mapperKey]?.cleanup?.();
+    } catch (error) {
+      console.warn('[attune] host mapper cleanup failed', error);
+    }
+    window[mapperKey] = undefined;
+    window.__attuneHost = undefined;
+    window.__attuneCompatibilityReports = {};
+  }
+  if (bindingSets.length && (bindingsChanged || mapperChanged || !window[mapperKey])) {
+    const requestedRoles = new Set(bindingSets.flatMap(set => set.bindings.map(binding => binding.role)));
+    const mappedElements = new Map();
+    const listeners = new Set();
+    let frame = 0;
+    let disposed = false;
+
+    const visible = element => {
+      if (!element?.isConnected) return false;
+      const bounds = element.getBoundingClientRect();
+      const style = getComputedStyle(element);
+      return style.display !== 'none'
+        && style.visibility !== 'hidden'
+        && bounds.width > 0
+        && bounds.height > 0;
+    };
+    const primaryChatScore = element => {
+      let score = element.tagName === 'MAIN' ? 1 : 0;
+      if (element.hasAttribute('data-app-shell-main-surface')) score += 6;
+      if (element.classList.contains('main-surface')) score += 5;
+      if (element.querySelector('[data-codex-composer-root]')) score += 4;
+      if (element.querySelector('[data-app-action-timeline-scroll]')) score += 3;
+      if (element.querySelector('button[aria-label="Chat actions"]')) score += 3;
+      if (visible(element)) score += 1;
+      return score;
+    };
+    const firstCandidate = (selector, root = document) => {
+      const candidates = [...root.querySelectorAll(selector)];
+      return candidates.find(visible) || candidates[0] || null;
+    };
+    const chatGptConversationScore = element => {
+      let score = element.tagName === 'MAIN' || element.getAttribute('role') === 'main' ? 2 : 0;
+      const messageCount = element.querySelectorAll(
+        '[data-message-author-role], article[data-turn], [data-user-message-bubble]',
+      ).length;
+      if (messageCount) score += Math.min(8, messageCount);
+      if (element.querySelector(
+        '#prompt-textarea, form[data-type="unified-composer"], [data-lexical-editor="true"]',
+      )) score += 3;
+      if (visible(element)) score += 1;
+      return score;
+    };
+    const resolveRole = role => {
+      if (role === 'document.root') return document.documentElement;
+      if (role === 'document.body') return document.body;
+      if (role === 'codex.primaryChat') {
+        return [...document.querySelectorAll('main')]
+          .map(element => ({ element, score: primaryChatScore(element) }))
+          .filter(candidate => candidate.score >= 8)
+          .sort((left, right) => right.score - left.score)[0]?.element || null;
+      }
+      if (role === 'codex.composer') {
+        const candidates = [...document.querySelectorAll('[data-codex-composer-root]')];
+        return candidates.find(visible)
+          || candidates[0]
+          || document.querySelector('[data-codex-composer-root]');
+      }
+      if (role === 'codex.appShell') {
+        const main = resolveRole('codex.primaryChat');
+        const sidebar = resolveRole('codex.sidebar');
+        return (main?.parentElement && (!sidebar || main.parentElement.contains(sidebar))
+          ? main.parentElement
+          : sidebar?.parentElement) || null;
+      }
+      if (role === 'codex.timeline') {
+        const candidates = [...document.querySelectorAll('[data-app-action-timeline-scroll]')];
+        return candidates.find(visible)
+          || candidates[0]
+          || document.querySelector('[data-app-action-timeline-scroll]');
+      }
+      if (role === 'codex.chatActions') {
+        const candidates = [...document.querySelectorAll('button[aria-label="Chat actions"]')];
+        return candidates.find(visible)
+          || candidates[0]
+          || document.querySelector('button[aria-label="Chat actions"]');
+      }
+      if (role === 'codex.chatHeader') {
+        const action = resolveRole('codex.chatActions');
+        return action?.closest('header')
+          || document.querySelector('.app-header-tint')
+          || null;
+      }
+      if (role === 'codex.sidebar') {
+        return [...document.querySelectorAll('aside.app-shell-left-panel, aside')]
+          .find(element => element.querySelector('[data-app-action-sidebar-scroll]') || visible(element))
+          || null;
+      }
+      if (role === 'codex.sidebarThreads') {
+        const sidebar = resolveRole('codex.sidebar');
+        return sidebar?.querySelector('[data-app-action-sidebar-scroll]')
+          || sidebar?.querySelector('nav')
+          || sidebar
+          || null;
+      }
+      if (role === 'codex.modelPicker') {
+        const composer = resolveRole('codex.composer');
+        return firstCandidate('[data-codex-intelligence-trigger]', composer || document)
+          || firstCandidate('button[aria-haspopup="menu"]', composer || document);
+      }
+      if (role === 'chatgpt.conversation') {
+        return [...document.querySelectorAll('main, [role="main"]')]
+          .map(element => ({ element, score: chatGptConversationScore(element) }))
+          .filter(candidate => candidate.score >= 3)
+          .sort((left, right) => right.score - left.score)[0]?.element
+          || null;
+      }
+      if (role === 'chatgpt.composer') {
+        return firstCandidate([
+          '#prompt-textarea',
+          'form[data-type="unified-composer"] textarea',
+          'form[data-type="unified-composer"] [contenteditable="true"]',
+          '[contenteditable="true"][role="textbox"]',
+          '[contenteditable="true"][data-lexical-editor="true"]',
+          'textarea',
+        ].join(', '));
+      }
+      if (role === 'chatgpt.attachmentMenu') {
+        return [...document.querySelectorAll(
+          '[data-radix-popper-content-wrapper] .popover, div.popover, [role="menu"]',
+        )].find(element => visible(element) && /Add photos|Attach|Upload/i.test(element.textContent || ''))
+          || null;
+      }
+      if (role === 'linear.workspace') {
+        return document.querySelector('[data-testid="app-shell"], #root, #app')
+          || document.body;
+      }
+      if (role === 'linear.issueList') {
+        const issueLink = firstCandidate('a[href*="/issue/"], a[href*="/team/"]');
+        return issueLink?.closest('[role="list"], [data-testid*="list" i], main')
+          || resolveRole('linear.workspace');
+      }
+      if (role === 'linear.issueDetail') {
+        const description = document.querySelector('[aria-label="Issue description"]');
+        return description?.closest('[role="dialog"], main, [data-testid*="issue" i]')
+          || (location.pathname.includes('/issue/') ? resolveRole('linear.workspace') : null);
+      }
+      if (role === 'linear.statusControl') {
+        return [...document.querySelectorAll('button, [role="button"]')]
+          .find(element => visible(element) && /^(backlog|todo|in progress|started|done|completed)$/i.test(
+            String(element.innerText || element.textContent || '').replace(/\s+/g, ' ').trim(),
+          )) || null;
+      }
+      if (role === 'slack.workspace') {
+        return document.querySelector('[data-qa="client_container"], .p-client, #client-ui')
+          || document.body;
+      }
+      if (role === 'slack.composer') {
+        return firstCandidate('[data-qa="texty_input"], [contenteditable="true"][role="textbox"]');
+      }
+      if (role === 'slack.sendButton') {
+        const composer = resolveRole('slack.composer');
+        return composer?.closest('form, [data-qa*="message_input" i]')
+          ?.querySelector('[data-qa="texty_send_button"], button[aria-label*="send" i]')
+          || firstCandidate('[data-qa="texty_send_button"], button[aria-label*="send" i]');
+      }
+      if (role === 'cursor.workbench') {
+        return document.querySelector('.monaco-workbench') || document.body;
+      }
+      if (role === 'cursor.titlebar') {
+        return firstCandidate('.monaco-workbench .part.titlebar, .part.titlebar');
+      }
+      if (role === 'youtube.player') {
+        return firstCandidate('video.html5-main-video, #movie_player video, video');
+      }
+      return null;
+    };
+    const setElementRoles = (element, roles) => {
+      if (!element) return;
+      if (roles.size) element.setAttribute('data-attune-host-roles', [...roles].sort().join(' '));
+      else element.removeAttribute('data-attune-host-roles');
+    };
+    const reconcile = () => {
+      if (disposed) return;
+      const previous = new Map(mappedElements);
+      const rolesByElement = new Map();
+      mappedElements.clear();
+      for (const role of requestedRoles) {
+        const element = resolveRole(role);
+        if (!element) continue;
+        mappedElements.set(role, element);
+        const roles = rolesByElement.get(element) || new Set();
+        roles.add(role);
+        rolesByElement.set(element, roles);
+      }
+      for (const element of new Set(previous.values())) {
+        if (!rolesByElement.has(element)) setElementRoles(element, new Set());
+      }
+      for (const [element, roles] of rolesByElement) setElementRoles(element, roles);
+      const reports = Object.fromEntries(bindingSets.map(set => {
+        const capabilities = Object.fromEntries(set.bindings.map(binding => {
+          const element = mappedElements.get(binding.role);
+          return [binding.name, {
+            role: binding.role,
+            required: binding.required,
+            status: element ? 'available' : 'unavailable',
+          }];
+        }));
+        const missingRequired = set.bindings
+          .filter(binding => binding.required && !mappedElements.has(binding.role))
+          .map(binding => binding.role);
+        return [set.attunementId, {
+          schemaVersion: set.schemaVersion,
+          appName: set.appName,
+          status: missingRequired.length
+            ? 'unavailable'
+            : Object.values(capabilities).some(capability => capability.status === 'unavailable')
+              ? 'degraded'
+              : 'compatible',
+          missingRequired,
+          capabilities,
+          checkedAt: Date.now(),
+        }];
+      }));
+      window.__attuneCompatibilityReports = reports;
+      const changes = [...requestedRoles].filter(role => previous.get(role) !== mappedElements.get(role));
+      if (changes.length) {
+        for (const listener of listeners) {
+          try { listener(changes); } catch (error) { console.warn('[attune] host mapping listener failed', error); }
+        }
+        window.dispatchEvent(new CustomEvent('attune:host-mappings-changed', { detail: { roles: changes } }));
+      }
+    };
+    const schedule = () => {
+      if (frame || disposed) return;
+      frame = requestAnimationFrame(() => {
+        frame = 0;
+        reconcile();
+      });
+    };
+    const observer = new MutationObserver(schedule);
+    observer.observe(document.documentElement, { childList: true, subtree: true });
+    reconcile();
+    window[mapperKey] = {
+      resolve: role => mappedElements.get(role) || null,
+      report: attunementId => window.__attuneCompatibilityReports?.[attunementId] || null,
+      subscribe: listener => {
+        if (typeof listener !== 'function') return () => {};
+        listeners.add(listener);
+        return () => listeners.delete(listener);
+      },
+      reconcile,
+      cleanup: () => {
+        if (disposed) return;
+        disposed = true;
+        observer.disconnect();
+        if (frame) cancelAnimationFrame(frame);
+        for (const element of new Set(mappedElements.values())) setElementRoles(element, new Set());
+        mappedElements.clear();
+        listeners.clear();
+      },
+    };
+    window.__attuneHost = window[mapperKey];
+  }
   if (!css) {
     current?.remove();
     status = 'removed';
@@ -1121,7 +1416,9 @@ export function buildStyleInjectionExpression(css: string, workspaceBridge: Reco
   }
   window[sourceHashKey] = sourceHash;
   window[styleHashKey] = styleHash;
+  window[bindingsHashKey] = bindingsHash;
   window[bridgeHashKey] = bridgeHash;
+  window[mapperVersionKey] = mapperVersion;
   return status;
 })()`;
 }
@@ -1144,13 +1441,17 @@ export function buildRuntimeStateProbeExpression(): string {
   const safeSourceHashKey = JSON.stringify(WORKSPACE_SOURCE_HASH_KEY);
   const safeStyleHashKey = JSON.stringify(WORKSPACE_STYLE_HASH_KEY);
   const safeScriptHashKey = JSON.stringify(WORKSPACE_SCRIPT_HASH_KEY);
+  const safeBindingsHashKey = JSON.stringify(WORKSPACE_BINDINGS_HASH_KEY);
   const safeBridgeHashKey = JSON.stringify(WORKSPACE_BRIDGE_HASH_KEY);
+  const safeMapperVersionKey = JSON.stringify(HOST_MAPPER_VERSION_KEY);
   return `(() => ({
   sourceHash: window[${safeSourceHashKey}] || null,
   styleHash: window[${safeStyleHashKey}] || null,
   styleElementHash: document.getElementById(${safeId})?.dataset.attuneHash || null,
   scriptHash: window[${safeScriptHashKey}] || null,
+  bindingsHash: window[${safeBindingsHashKey}] || null,
   bridgeHash: window[${safeBridgeHashKey}] || null,
+  mapperVersion: window[${safeMapperVersionKey}] ?? null,
 }))()`;
 }
 
@@ -1164,7 +1465,9 @@ function getWorkspaceRuntimeState(
     styleHash: hashValue(workspaceSource.css),
     styleElementHash: workspaceSource.css ? hashValue(workspaceSource.css) : null,
     scriptHash: hashValue(workspaceSource.script),
+    bindingsHash: hashValue(JSON.stringify(workspaceSource.bindingSets)),
     bridgeHash: hashValue(JSON.stringify(workspaceBridge)),
+    mapperVersion: HOST_MAPPER_VERSION,
   };
 }
 
@@ -1175,7 +1478,9 @@ function runtimeStatesMatch(actual: RuntimeState | null, expected: RuntimeState)
     && actual.styleHash === expected.styleHash
     && actual.styleElementHash === expected.styleElementHash
     && actual.scriptHash === expected.scriptHash
+    && actual.bindingsHash === expected.bindingsHash
     && actual.bridgeHash === expected.bridgeHash
+    && actual.mapperVersion === expected.mapperVersion
   );
 }
 
@@ -1183,9 +1488,37 @@ function hashValue(value: string): string {
   return createHash('sha256').update(value).digest('hex');
 }
 
-export function splitWorkspaceSource(source: string): { css: string; script: string } {
+export function splitWorkspaceSource(source: string): {
+  css: string;
+  script: string;
+  bindingSets: HostBindingSet[];
+} {
   const scripts: string[] = [];
-  const css = source.replace(WORKSPACE_SCRIPT_RE, (_match, script: string) => {
+  const bindingSets: HostBindingSet[] = [];
+  const withoutBindings = source.replace(WORKSPACE_BINDINGS_RE, (_match, metadata: string) => {
+    try {
+      const parsed = JSON.parse(metadata.trim()) as Partial<HostBindingSet>;
+      if (
+        typeof parsed.attunementId === 'string'
+        && typeof parsed.appName === 'string'
+        && Array.isArray(parsed.bindings)
+      ) {
+        bindingSets.push({
+          schemaVersion: typeof parsed.schemaVersion === 'number' ? parsed.schemaVersion : 1,
+          attunementId: parsed.attunementId,
+          appName: parsed.appName,
+          bindings: parsed.bindings.filter((binding): binding is HostBinding => (
+            Boolean(binding)
+            && typeof binding.name === 'string'
+            && typeof binding.role === 'string'
+            && typeof binding.required === 'boolean'
+          )),
+        });
+      }
+    } catch {}
+    return '';
+  });
+  const css = withoutBindings.replace(WORKSPACE_SCRIPT_RE, (_match, script: string) => {
     scripts.push(script.trim());
     return '';
   }).trim();
@@ -1193,6 +1526,7 @@ export function splitWorkspaceSource(source: string): { css: string; script: str
   return {
     css,
     script: scripts.join('\n;\n'),
+    bindingSets,
   };
 }
 

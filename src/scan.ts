@@ -43,7 +43,23 @@ export function scanForSupportedApps(): DiscoveredApp[] {
     }
   }
 
-  return apps;
+  return deduplicateAppsByBundleId(apps);
+}
+
+/**
+ * Keep the first discovered copy of each bundle. System applications are
+ * scanned before user applications, so /Applications wins when both contain
+ * the same app.
+ */
+export function deduplicateAppsByBundleId(apps: DiscoveredApp[]): DiscoveredApp[] {
+  const seenBundleIds = new Set<string>();
+
+  return apps.filter(app => {
+    if (!app.bundleId) return true;
+    if (seenBundleIds.has(app.bundleId)) return false;
+    seenBundleIds.add(app.bundleId);
+    return true;
+  });
 }
 
 export function getChromiumRuntime(appPath: string): ChromiumRuntime | null {
