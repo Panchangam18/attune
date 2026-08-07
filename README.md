@@ -55,21 +55,15 @@ output should be treated as private user data.
 
 ## Design Systems
 
-### Included Theme Systems
+### Theme Systems
 
-[Arrakis](themes/arrakis/README.md) is a desert-first, Dune-inspired design
-system for a personal desktop. Its shared sand, dune, ink, spice, and water
-tokens generate standalone base layouts for Spotify, Slack, VS Code, Claude,
-and ChatGPT.
+Official theme systems, including Arrakis, live in the separate
+[`attunements`](https://github.com/Panchangam18/attunements) catalog alongside
+app-specific attunements. Attune App consumes that catalog directly and can
+compose its tokens, base layout, and adapters at runtime.
 
-Arrakis uses Nasalization Regular for all readable UI text. Install it locally
-from [Typodermic](https://typodermicfonts.com/nasalization/) before applying a
-theme; Attune intentionally does not distribute the font file.
-
-```sh
-npm run build:themes
-node dist/cli.js set-css "Spotify" ./examples/spotify-arrakis.css
-```
+Arrakis uses Nasalization Regular for readable UI text. The catalog package
+includes the font asset so Attune can compile a self-contained stylesheet.
 
 Spotify, Slack, VS Code, and ChatGPT are intended for Attune-compatible desktop
 renderers. The Claude adapter is a reusable CSS surface for a browser extension

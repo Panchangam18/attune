@@ -1,6 +1,6 @@
 {
   "name": "attune",
-  "version": "0.1.8",
+  "version": "0.2.0",
   "description": "Agent skill and live CSS runtime for Chromium desktop apps",
   "type": "module",
   "files": [
@@ -9,7 +9,6 @@
     "SKILL.md",
     "agents",
     "examples",
-    "themes",
     "scripts"
   ],
   "keywords": [
@@ -27,10 +26,8 @@
   },
   "scripts": {
     "build": "tsc",
-    "build:themes": "node scripts/build-themes.mjs",
-    "build:arrakis": "node scripts/build-themes.mjs arrakis",
     "dev": "tsx src/cli.ts",
-    "prepack": "npm run build && npm run build:themes",
+    "prepack": "npm run build",
     "test": "npm run build && node --test test/*.test.mjs"
   },
   "devDependencies": {
