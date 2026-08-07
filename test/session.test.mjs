@@ -1,19 +1,22 @@
 import assert from 'node:assert/strict';
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
 import vm from 'node:vm';
 import { readStylesheet } from '../dist/config.js';
 import { getChromiumRuntime } from '../dist/scan.js';
+import { HOST_ROLE_CATALOG } from '../dist/host-roles.js';
 import {
   buildInspectionExpression,
   buildStyleInjectionExpression,
   compactInspection,
+  readHostFingerprints,
   resolveClaudeCliPath,
   shouldEnableClaudeCodexProxy,
   splitWorkspaceSource,
   TargetStylesheetSession,
+  writeHostFingerprints,
 } from '../dist/session.js';
 
 test('Claude Codex proxy is gated by both the ChatGPT bundle and Attune launch flag', () => {
@@ -346,26 +349,186 @@ window.__mappedBeforeScript = Boolean(window.__attuneHost?.resolve('codex.primar
 
 test('host mapper publishes semantic strategies for every supported attunement surface', () => {
   const expression = buildStyleInjectionExpression('body { color: CanvasText; }');
-  for (const role of [
-    'codex.appShell',
-    'codex.sidebarThreads',
-    'codex.modelPicker',
-    'chatgpt.conversation',
-    'chatgpt.composer',
-    'chatgpt.attachmentMenu',
-    'linear.workspace',
-    'linear.issueList',
-    'linear.issueDetail',
-    'linear.statusControl',
-    'slack.workspace',
-    'slack.composer',
-    'slack.sendButton',
-    'cursor.workbench',
-    'cursor.titlebar',
-    'youtube.player',
-  ]) {
+  for (const role of Object.keys(HOST_ROLE_CATALOG)) {
     assert.match(expression, new RegExp(role.replace('.', '\\.')));
   }
+});
+
+function createFingerprintRenderer(candidates, deterministicCandidates = []) {
+  const attributes = new Map();
+  const styles = new Map();
+  const makeElement = (name, overrides = {}) => ({
+    name,
+    isConnected: true,
+    tagName: 'DIV',
+    textContent: '',
+    parentElement: null,
+    classList: [],
+    getAttribute() { return ''; },
+    hasAttribute() { return false; },
+    querySelector() { return null; },
+    querySelectorAll() { return []; },
+    setAttribute(key, value) { attributes.set(`${name}:${key}`, value); },
+    removeAttribute(key) { attributes.delete(`${name}:${key}`); },
+    getBoundingClientRect() { return { x: 0, y: 0, width: 100, height: 40 }; },
+    ...overrides,
+  });
+  const documentElement = makeElement('html', { tagName: 'HTML' });
+  const body = makeElement('body', { tagName: 'BODY' });
+  const document = {
+    documentElement,
+    body,
+    head: { append(style) { styles.set(style.id, style); } },
+    createElement() { return { dataset: {}, remove() { styles.delete(this.id); } }; },
+    getElementById(id) { return styles.get(id) || null; },
+    querySelector() { return null; },
+    querySelectorAll(selector) {
+      if (selector === '[data-qa="texty_input"], [contenteditable="true"][role="textbox"]') {
+        return deterministicCandidates;
+      }
+      if (selector === 'body *') return candidates;
+      return [];
+    },
+  };
+  const window = { dispatchEvent() {} };
+  class MutationObserver { observe() {} disconnect() {} }
+  class CustomEvent { constructor(type, init) { this.type = type; this.detail = init.detail; } }
+  return {
+    attributes,
+    context: {
+      document,
+      window,
+      console,
+      innerWidth: 1000,
+      innerHeight: 800,
+      MutationObserver,
+      CustomEvent,
+      getComputedStyle: () => ({ display: 'block', visibility: 'visible' }),
+      requestAnimationFrame: callback => { callback(); return 1; },
+      cancelAnimationFrame() {},
+    },
+  };
+}
+
+const slackComposerSource = `/* @attune-bindings
+{"schemaVersion":1,"attunementId":"slack-test","appName":"Slack","bindings":[{"name":"composer","role":"slack.composer","required":true}]}
+@end-attune-bindings */
+
+[data-attune-host-roles~="slack.composer"] { border: 1px solid; }`;
+
+const savedSlackComposerFingerprint = {
+  'slack.composer': {
+    tag: 'div',
+    role: 'textbox',
+    label: 'Message',
+    text: 'Write a message',
+    attributes: { role: 'textbox', 'aria-label': 'Message' },
+    classes: ['message-composer'],
+    ancestor: { tag: 'form', role: 'form', label: 'Message form' },
+    geometry: { horizontal: 'center', vertical: 'end', widthRatio: 0.7, heightRatio: 0.08 },
+  },
+};
+
+test('host mapper recovers a changed element from a high-confidence fingerprint', () => {
+  const parent = {
+    tagName: 'FORM',
+    getAttribute(name) { return name === 'role' ? 'form' : name === 'aria-label' ? 'Message form' : ''; },
+  };
+  const desired = {
+    name: 'desired', isConnected: true, tagName: 'DIV', textContent: 'Write a message', parentElement: parent,
+    classList: ['message-composer'],
+    getAttribute(name) { return name === 'role' ? 'textbox' : name === 'aria-label' ? 'Message' : ''; },
+    hasAttribute() { return false; }, querySelector() { return null; }, querySelectorAll() { return []; },
+    setAttribute() {}, removeAttribute() {},
+    getBoundingClientRect() { return { x: 150, y: 704, width: 700, height: 64 }; },
+  };
+  const distractor = {
+    ...desired,
+    name: 'distractor', tagName: 'BUTTON', textContent: 'Cancel', classList: ['secondary-action'],
+    getAttribute(name) { return name === 'role' ? 'button' : name === 'aria-label' ? 'Cancel' : ''; },
+    getBoundingClientRect() { return { x: 10, y: 10, width: 80, height: 30 }; },
+  };
+  const renderer = createFingerprintRenderer([distractor, desired], [distractor]);
+  desired.setAttribute = (key, value) => renderer.attributes.set(`desired:${key}`, value);
+  desired.removeAttribute = key => renderer.attributes.delete(`desired:${key}`);
+
+  assert.equal(vm.runInNewContext(
+    buildStyleInjectionExpression(slackComposerSource, {}, savedSlackComposerFingerprint),
+    renderer.context,
+  ), 'applied');
+  assert.equal(renderer.attributes.get('desired:data-attune-host-roles'), 'slack.composer');
+  const capability = renderer.context.window.__attuneCompatibilityReports['slack-test'].capabilities.composer;
+  assert.equal(capability.method, 'fingerprint');
+  assert.ok(capability.confidence >= 0.72);
+  assert.equal(
+    JSON.stringify([...renderer.context.window.__attuneHost.roles()].sort()),
+    JSON.stringify(Object.keys(HOST_ROLE_CATALOG).sort()),
+  );
+});
+
+test('host mapper rejects ambiguous fingerprint matches', () => {
+  const parent = { tagName: 'FORM', getAttribute() { return ''; } };
+  const candidate = name => ({
+    name, isConnected: true, tagName: 'DIV', textContent: 'Write a message', parentElement: parent,
+    classList: ['message-composer'],
+    getAttribute(key) { return key === 'role' ? 'textbox' : key === 'aria-label' ? 'Message' : ''; },
+    hasAttribute() { return false; }, querySelector() { return null; }, querySelectorAll() { return []; },
+    setAttribute() {}, removeAttribute() {},
+    getBoundingClientRect() { return { x: 150, y: 704, width: 700, height: 64 }; },
+  });
+  const renderer = createFingerprintRenderer([candidate('one'), candidate('two')]);
+  vm.runInNewContext(
+    buildStyleInjectionExpression(slackComposerSource, {}, savedSlackComposerFingerprint),
+    renderer.context,
+  );
+  const report = renderer.context.window.__attuneCompatibilityReports['slack-test'];
+  assert.equal(report.status, 'unavailable');
+  assert.equal(report.capabilities.composer.method, 'unavailable');
+  assert.equal(renderer.attributes.size, 0);
+});
+
+test('semantic host roles are published as an agent-readable catalog', () => {
+  assert.equal(HOST_ROLE_CATALOG['codex.primaryChat'].app, 'Codex');
+  assert.match(HOST_ROLE_CATALOG['slack.composer'].description, /composer/i);
+  assert.equal(Object.keys(HOST_ROLE_CATALOG).length, 24);
+});
+
+test('host fingerprints round-trip in isolated per-app stores and reject corrupt data', async t => {
+  const root = await mkdtemp(join(tmpdir(), 'attune-host-fingerprints-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const fingerprints = { 'codex.primaryChat': { tag: 'main', role: 'main' } };
+
+  writeHostFingerprints('com.openai.codex', fingerprints, root);
+  assert.deepEqual(readHostFingerprints('com.openai.codex', root), fingerprints);
+  assert.deepEqual(readHostFingerprints('com.tinyspeck.slackmacgap', root), {});
+
+  const [fingerprintsFile] = await readdir(root);
+  await writeFile(join(root, fingerprintsFile), '{invalid json');
+  assert.deepEqual(readHostFingerprints('com.openai.codex', root), {});
+});
+
+test('target sessions persist learned host fingerprints immediately after injection', async t => {
+  const root = await mkdtemp(join(tmpdir(), 'attune-host-session-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const learned = { 'slack.composer': savedSlackComposerFingerprint['slack.composer'] };
+  writeHostFingerprints('com.tinyspeck.slackmacgap', learned, root);
+  const commands = [];
+  const transport = {
+    async send(method, params) {
+      commands.push({ method, params });
+      if (method === 'Runtime.evaluate' && params.expression.startsWith('(() => window.__attuneHost')) {
+        return { result: { value: learned } };
+      }
+      return {};
+    },
+    close() {},
+  };
+  const session = new TargetStylesheetSession(transport, 'com.tinyspeck.slackmacgap', root);
+  await session.sync(slackComposerSource, {}, 1_000);
+
+  assert.deepEqual(readHostFingerprints('com.tinyspeck.slackmacgap', root), learned);
+  assert.equal(commands.filter(command => command.method === 'Runtime.evaluate').length, 2);
+  assert.match(commands.find(command => command.method === 'Runtime.evaluate').params.expression, /message-composer/);
 });
 
 test('stylesheet reads live source edits and falls back to the saved CSS', async (t) => {

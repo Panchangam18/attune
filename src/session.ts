@@ -7,7 +7,14 @@ import { createServer } from 'net';
 import { createServer as createHttpServer, type IncomingMessage, type ServerResponse } from 'http';
 import { createCodexTaskFromChatGpt, type ChatGptCodexTransfer } from './codex-chatgpt.js';
 import { ensureConfig, readStylesheet } from './config.js';
+import {
+  buildHostFingerprintProbeExpression,
+  getHostMapperInstallerSource,
+  HOST_MAPPER_VERSION,
+} from './host-roles.js';
 import { type DiscoveredApp, getAppExecutablePath, getAppId } from './scan.js';
+
+export { buildHostFingerprintProbeExpression };
 
 const ATTUNE_DIR = join(homedir(), '.attune');
 const SESSION_DIR = join(ATTUNE_DIR, 'sessions');
@@ -24,13 +31,13 @@ const RUNTIME_STATE_VERIFY_INTERVAL_MS = 5000;
 const SESSION_HEARTBEAT_INTERVAL_MS = 5000;
 const INSPECTION_TTL_MS = 24 * 60 * 60 * 1000;
 const INSPECTION_TEMP_PREFIX = 'attune-inspect-';
+const HOST_FINGERPRINTS_DIR = join(ATTUNE_DIR, 'host-fingerprints');
 
 const WORKSPACE_SOURCE_HASH_KEY = '__attuneWorkspaceSourceHash';
 const WORKSPACE_STYLE_HASH_KEY = '__attuneWorkspaceStyleHash';
 const WORKSPACE_SCRIPT_HASH_KEY = '__attuneWorkspaceScriptHash';
 const WORKSPACE_BINDINGS_HASH_KEY = '__attuneWorkspaceBindingsHash';
 const WORKSPACE_BRIDGE_HASH_KEY = '__attuneWorkspaceBridgeHash';
-const HOST_MAPPER_VERSION = 2;
 const HOST_MAPPER_VERSION_KEY = '__attuneHostMapperVersion';
 
 interface DebugTarget {
@@ -55,6 +62,7 @@ interface RuntimeState {
   bindingsHash: string | null;
   bridgeHash: string | null;
   mapperVersion: number | null;
+  hostFingerprints?: Record<string, unknown>;
 }
 
 export interface DevToolsCommandTransport {
@@ -469,6 +477,7 @@ export async function runWatcher(configPath: string, port: number, sessionPath: 
   let lastPublishedTargetCount = -1;
   let lastPublishedAt = 0;
   const targetSessions = new Map<string, TargetStylesheetSession>();
+  const hostFingerprintKey = readSession(sessionPath)?.appId ?? null;
   const stopWorkspaceBridgeServer = startWorkspaceBridgeServer();
 
   const stop = () => {
@@ -511,7 +520,7 @@ export async function runWatcher(configPath: string, port: number, sessionPath: 
         }
       },
     );
-    targetSession = new TargetStylesheetSession(connection);
+    targetSession = new TargetStylesheetSession(connection, hostFingerprintKey);
     targetSessions.set(webSocketUrl, targetSession);
     return targetSession;
   };
@@ -720,8 +729,13 @@ export class TargetStylesheetSession {
   private appliedBridgeHash: string | null = null;
   private invalidationVersion = 0;
   private lastVerifiedAt = 0;
+  private persistedHostFingerprints: string | null = null;
 
-  constructor(private readonly transport: DevToolsCommandTransport) {}
+  constructor(
+    private readonly transport: DevToolsCommandTransport,
+    private readonly hostFingerprintKey: string | null = null,
+    private readonly hostFingerprintsRoot = HOST_FINGERPRINTS_DIR,
+  ) {}
 
   async sync(
     stylesheet: string,
@@ -774,11 +788,18 @@ export class TargetStylesheetSession {
   ): Promise<void> {
     const invalidationVersion = this.invalidationVersion;
     const response = await this.transport.send<{ exceptionDetails?: unknown }>('Runtime.evaluate', {
-      expression: buildStyleInjectionExpression(stylesheet, workspaceBridge),
+      expression: buildStyleInjectionExpression(
+        stylesheet,
+        workspaceBridge,
+        this.hostFingerprintKey
+          ? readHostFingerprints(this.hostFingerprintKey, this.hostFingerprintsRoot)
+          : {},
+      ),
       returnByValue: true,
     });
     if (response.exceptionDetails) throw new Error('Attune source update failed in the renderer.');
     if (invalidationVersion !== this.invalidationVersion) return;
+    await this.persistHostFingerprintsFromRenderer();
     this.appliedSourceHash = expected.sourceHash;
     this.appliedBridgeHash = expected.bridgeHash;
     this.lastVerifiedAt = now;
@@ -807,7 +828,28 @@ export class TargetStylesheetSession {
       expression: buildRuntimeStateProbeExpression(),
       returnByValue: true,
     });
-    return response.result?.value ?? null;
+    const state = response.result?.value ?? null;
+    this.persistHostFingerprints(state?.hostFingerprints);
+    return state;
+  }
+
+  private async persistHostFingerprintsFromRenderer(): Promise<void> {
+    if (!this.hostFingerprintKey) return;
+    const response = await this.transport.send<{
+      result?: { value?: Record<string, unknown> };
+    }>('Runtime.evaluate', {
+      expression: buildHostFingerprintProbeExpression(),
+      returnByValue: true,
+    });
+    this.persistHostFingerprints(response.result?.value);
+  }
+
+  private persistHostFingerprints(fingerprints: Record<string, unknown> | undefined): void {
+    if (!fingerprints || !this.hostFingerprintKey) return;
+    const serialized = JSON.stringify(fingerprints);
+    if (serialized === this.persistedHostFingerprints) return;
+    writeHostFingerprints(this.hostFingerprintKey, fingerprints, this.hostFingerprintsRoot);
+    this.persistedHostFingerprints = serialized;
   }
 }
 
@@ -1067,7 +1109,11 @@ function scheduleCodexTaskOpen(threadId: string): void {
   timer.unref();
 }
 
-export function buildStyleInjectionExpression(css: string, workspaceBridge: Record<string, unknown> = {}): string {
+export function buildStyleInjectionExpression(
+  css: string,
+  workspaceBridge: Record<string, unknown> = {},
+  hostFingerprints: Record<string, unknown> = {},
+): string {
   const workspaceSource = splitWorkspaceSource(css);
   const state = getWorkspaceRuntimeState(css, workspaceBridge);
   const safeCss = JSON.stringify(workspaceSource.css);
@@ -1080,6 +1126,8 @@ export function buildStyleInjectionExpression(css: string, workspaceBridge: Reco
   const safeScript = JSON.stringify(workspaceSource.script);
   const safeBindingSets = JSON.stringify(workspaceSource.bindingSets);
   const safeWorkspaceBridge = JSON.stringify(workspaceBridge);
+  const safeHostFingerprints = JSON.stringify(hostFingerprints);
+  const safeHostMapperInstaller = getHostMapperInstallerSource();
   const safeSourceHashKey = JSON.stringify(WORKSPACE_SOURCE_HASH_KEY);
   const safeStyleHashKey = JSON.stringify(WORKSPACE_STYLE_HASH_KEY);
   const safeScriptHashKey = JSON.stringify(WORKSPACE_SCRIPT_HASH_KEY);
@@ -1098,6 +1146,7 @@ export function buildStyleInjectionExpression(css: string, workspaceBridge: Reco
   const css = ${safeCss};
   const script = ${safeScript};
   const bindingSets = ${safeBindingSets};
+  const hostFingerprints = ${safeHostFingerprints};
   window.__attuneWorkspaceBridge = ${safeWorkspaceBridge};
   const cleanupKey = '__attuneWorkspaceScriptCleanup';
   const sourceHashKey = ${safeSourceHashKey};
@@ -1124,256 +1173,7 @@ export function buildStyleInjectionExpression(css: string, workspaceBridge: Reco
     window.__attuneCompatibilityReports = {};
   }
   if (bindingSets.length && (bindingsChanged || mapperChanged || !window[mapperKey])) {
-    const requestedRoles = new Set(bindingSets.flatMap(set => set.bindings.map(binding => binding.role)));
-    const mappedElements = new Map();
-    const listeners = new Set();
-    let frame = 0;
-    let disposed = false;
-
-    const visible = element => {
-      if (!element?.isConnected) return false;
-      const bounds = element.getBoundingClientRect();
-      const style = getComputedStyle(element);
-      return style.display !== 'none'
-        && style.visibility !== 'hidden'
-        && bounds.width > 0
-        && bounds.height > 0;
-    };
-    const primaryChatScore = element => {
-      let score = element.tagName === 'MAIN' ? 1 : 0;
-      if (element.hasAttribute('data-app-shell-main-surface')) score += 6;
-      if (element.classList.contains('main-surface')) score += 5;
-      if (element.querySelector('[data-codex-composer-root]')) score += 4;
-      if (element.querySelector('[data-app-action-timeline-scroll]')) score += 3;
-      if (element.querySelector('button[aria-label="Chat actions"]')) score += 3;
-      if (visible(element)) score += 1;
-      return score;
-    };
-    const firstCandidate = (selector, root = document) => {
-      const candidates = [...root.querySelectorAll(selector)];
-      return candidates.find(visible) || candidates[0] || null;
-    };
-    const chatGptConversationScore = element => {
-      let score = element.tagName === 'MAIN' || element.getAttribute('role') === 'main' ? 2 : 0;
-      const messageCount = element.querySelectorAll(
-        '[data-message-author-role], article[data-turn], [data-user-message-bubble]',
-      ).length;
-      if (messageCount) score += Math.min(8, messageCount);
-      if (element.querySelector(
-        '#prompt-textarea, form[data-type="unified-composer"], [data-lexical-editor="true"]',
-      )) score += 3;
-      if (visible(element)) score += 1;
-      return score;
-    };
-    const resolveRole = role => {
-      if (role === 'document.root') return document.documentElement;
-      if (role === 'document.body') return document.body;
-      if (role === 'codex.primaryChat') {
-        return [...document.querySelectorAll('main')]
-          .map(element => ({ element, score: primaryChatScore(element) }))
-          .filter(candidate => candidate.score >= 8)
-          .sort((left, right) => right.score - left.score)[0]?.element || null;
-      }
-      if (role === 'codex.composer') {
-        const candidates = [...document.querySelectorAll('[data-codex-composer-root]')];
-        return candidates.find(visible)
-          || candidates[0]
-          || document.querySelector('[data-codex-composer-root]');
-      }
-      if (role === 'codex.appShell') {
-        const main = resolveRole('codex.primaryChat');
-        const sidebar = resolveRole('codex.sidebar');
-        return (main?.parentElement && (!sidebar || main.parentElement.contains(sidebar))
-          ? main.parentElement
-          : sidebar?.parentElement) || null;
-      }
-      if (role === 'codex.timeline') {
-        const candidates = [...document.querySelectorAll('[data-app-action-timeline-scroll]')];
-        return candidates.find(visible)
-          || candidates[0]
-          || document.querySelector('[data-app-action-timeline-scroll]');
-      }
-      if (role === 'codex.chatActions') {
-        const candidates = [...document.querySelectorAll('button[aria-label="Chat actions"]')];
-        return candidates.find(visible)
-          || candidates[0]
-          || document.querySelector('button[aria-label="Chat actions"]');
-      }
-      if (role === 'codex.chatHeader') {
-        const action = resolveRole('codex.chatActions');
-        return action?.closest('header')
-          || document.querySelector('.app-header-tint')
-          || null;
-      }
-      if (role === 'codex.sidebar') {
-        return [...document.querySelectorAll('aside.app-shell-left-panel, aside')]
-          .find(element => element.querySelector('[data-app-action-sidebar-scroll]') || visible(element))
-          || null;
-      }
-      if (role === 'codex.sidebarThreads') {
-        const sidebar = resolveRole('codex.sidebar');
-        return sidebar?.querySelector('[data-app-action-sidebar-scroll]')
-          || sidebar?.querySelector('nav')
-          || sidebar
-          || null;
-      }
-      if (role === 'codex.modelPicker') {
-        const composer = resolveRole('codex.composer');
-        return firstCandidate('[data-codex-intelligence-trigger]', composer || document)
-          || firstCandidate('button[aria-haspopup="menu"]', composer || document);
-      }
-      if (role === 'chatgpt.conversation') {
-        return [...document.querySelectorAll('main, [role="main"]')]
-          .map(element => ({ element, score: chatGptConversationScore(element) }))
-          .filter(candidate => candidate.score >= 3)
-          .sort((left, right) => right.score - left.score)[0]?.element
-          || null;
-      }
-      if (role === 'chatgpt.composer') {
-        return firstCandidate([
-          '#prompt-textarea',
-          'form[data-type="unified-composer"] textarea',
-          'form[data-type="unified-composer"] [contenteditable="true"]',
-          '[contenteditable="true"][role="textbox"]',
-          '[contenteditable="true"][data-lexical-editor="true"]',
-          'textarea',
-        ].join(', '));
-      }
-      if (role === 'chatgpt.attachmentMenu') {
-        return [...document.querySelectorAll(
-          '[data-radix-popper-content-wrapper] .popover, div.popover, [role="menu"]',
-        )].find(element => visible(element) && /Add photos|Attach|Upload/i.test(element.textContent || ''))
-          || null;
-      }
-      if (role === 'linear.workspace') {
-        return document.querySelector('[data-testid="app-shell"], #root, #app')
-          || document.body;
-      }
-      if (role === 'linear.issueList') {
-        const issueLink = firstCandidate('a[href*="/issue/"], a[href*="/team/"]');
-        return issueLink?.closest('[role="list"], [data-testid*="list" i], main')
-          || resolveRole('linear.workspace');
-      }
-      if (role === 'linear.issueDetail') {
-        const description = document.querySelector('[aria-label="Issue description"]');
-        return description?.closest('[role="dialog"], main, [data-testid*="issue" i]')
-          || (location.pathname.includes('/issue/') ? resolveRole('linear.workspace') : null);
-      }
-      if (role === 'linear.statusControl') {
-        return [...document.querySelectorAll('button, [role="button"]')]
-          .find(element => visible(element) && /^(backlog|todo|in progress|started|done|completed)$/i.test(
-            String(element.innerText || element.textContent || '').replace(/\s+/g, ' ').trim(),
-          )) || null;
-      }
-      if (role === 'slack.workspace') {
-        return document.querySelector('[data-qa="client_container"], .p-client, #client-ui')
-          || document.body;
-      }
-      if (role === 'slack.composer') {
-        return firstCandidate('[data-qa="texty_input"], [contenteditable="true"][role="textbox"]');
-      }
-      if (role === 'slack.sendButton') {
-        const composer = resolveRole('slack.composer');
-        return composer?.closest('form, [data-qa*="message_input" i]')
-          ?.querySelector('[data-qa="texty_send_button"], button[aria-label*="send" i]')
-          || firstCandidate('[data-qa="texty_send_button"], button[aria-label*="send" i]');
-      }
-      if (role === 'cursor.workbench') {
-        return document.querySelector('.monaco-workbench') || document.body;
-      }
-      if (role === 'cursor.titlebar') {
-        return firstCandidate('.monaco-workbench .part.titlebar, .part.titlebar');
-      }
-      if (role === 'youtube.player') {
-        return firstCandidate('video.html5-main-video, #movie_player video, video');
-      }
-      return null;
-    };
-    const setElementRoles = (element, roles) => {
-      if (!element) return;
-      if (roles.size) element.setAttribute('data-attune-host-roles', [...roles].sort().join(' '));
-      else element.removeAttribute('data-attune-host-roles');
-    };
-    const reconcile = () => {
-      if (disposed) return;
-      const previous = new Map(mappedElements);
-      const rolesByElement = new Map();
-      mappedElements.clear();
-      for (const role of requestedRoles) {
-        const element = resolveRole(role);
-        if (!element) continue;
-        mappedElements.set(role, element);
-        const roles = rolesByElement.get(element) || new Set();
-        roles.add(role);
-        rolesByElement.set(element, roles);
-      }
-      for (const element of new Set(previous.values())) {
-        if (!rolesByElement.has(element)) setElementRoles(element, new Set());
-      }
-      for (const [element, roles] of rolesByElement) setElementRoles(element, roles);
-      const reports = Object.fromEntries(bindingSets.map(set => {
-        const capabilities = Object.fromEntries(set.bindings.map(binding => {
-          const element = mappedElements.get(binding.role);
-          return [binding.name, {
-            role: binding.role,
-            required: binding.required,
-            status: element ? 'available' : 'unavailable',
-          }];
-        }));
-        const missingRequired = set.bindings
-          .filter(binding => binding.required && !mappedElements.has(binding.role))
-          .map(binding => binding.role);
-        return [set.attunementId, {
-          schemaVersion: set.schemaVersion,
-          appName: set.appName,
-          status: missingRequired.length
-            ? 'unavailable'
-            : Object.values(capabilities).some(capability => capability.status === 'unavailable')
-              ? 'degraded'
-              : 'compatible',
-          missingRequired,
-          capabilities,
-          checkedAt: Date.now(),
-        }];
-      }));
-      window.__attuneCompatibilityReports = reports;
-      const changes = [...requestedRoles].filter(role => previous.get(role) !== mappedElements.get(role));
-      if (changes.length) {
-        for (const listener of listeners) {
-          try { listener(changes); } catch (error) { console.warn('[attune] host mapping listener failed', error); }
-        }
-        window.dispatchEvent(new CustomEvent('attune:host-mappings-changed', { detail: { roles: changes } }));
-      }
-    };
-    const schedule = () => {
-      if (frame || disposed) return;
-      frame = requestAnimationFrame(() => {
-        frame = 0;
-        reconcile();
-      });
-    };
-    const observer = new MutationObserver(schedule);
-    observer.observe(document.documentElement, { childList: true, subtree: true });
-    reconcile();
-    window[mapperKey] = {
-      resolve: role => mappedElements.get(role) || null,
-      report: attunementId => window.__attuneCompatibilityReports?.[attunementId] || null,
-      subscribe: listener => {
-        if (typeof listener !== 'function') return () => {};
-        listeners.add(listener);
-        return () => listeners.delete(listener);
-      },
-      reconcile,
-      cleanup: () => {
-        if (disposed) return;
-        disposed = true;
-        observer.disconnect();
-        if (frame) cancelAnimationFrame(frame);
-        for (const element of new Set(mappedElements.values())) setElementRoles(element, new Set());
-        mappedElements.clear();
-        listeners.clear();
-      },
-    };
+    window[mapperKey] = (${safeHostMapperInstaller})(bindingSets, hostFingerprints);
     window.__attuneHost = window[mapperKey];
   }
   if (!css) {
@@ -1452,6 +1252,7 @@ export function buildRuntimeStateProbeExpression(): string {
   bindingsHash: window[${safeBindingsHashKey}] || null,
   bridgeHash: window[${safeBridgeHashKey}] || null,
   mapperVersion: window[${safeMapperVersionKey}] ?? null,
+  hostFingerprints: window.__attuneHost?.fingerprints?.() || {},
 }))()`;
 }
 
@@ -1701,6 +1502,49 @@ function slugify(value: string): string {
 
 function getSessionPath(appId: string): string {
   return join(SESSION_DIR, `${appId}.json`);
+}
+
+interface HostFingerprintStore {
+  schemaVersion: 1;
+  appId: string;
+  fingerprints: Record<string, unknown>;
+}
+
+function getHostFingerprintsPath(appId: string, fingerprintsRoot = HOST_FINGERPRINTS_DIR): string {
+  const fileName = `${createHash('sha256').update(appId).digest('hex')}.json`;
+  return join(fingerprintsRoot, fileName);
+}
+
+function readHostFingerprintStore(appId: string, fingerprintsRoot = HOST_FINGERPRINTS_DIR): HostFingerprintStore {
+  const fingerprintsPath = getHostFingerprintsPath(appId, fingerprintsRoot);
+  if (!existsSync(fingerprintsPath)) return { schemaVersion: 1, appId, fingerprints: {} };
+  try {
+    const parsed = JSON.parse(readFileSync(fingerprintsPath, 'utf8')) as Partial<HostFingerprintStore>;
+    return parsed.schemaVersion === 1 && parsed.appId === appId
+      && parsed.fingerprints && typeof parsed.fingerprints === 'object'
+      ? { schemaVersion: 1, appId, fingerprints: parsed.fingerprints }
+      : { schemaVersion: 1, appId, fingerprints: {} };
+  } catch {
+    return { schemaVersion: 1, appId, fingerprints: {} };
+  }
+}
+
+export function readHostFingerprints(
+  appId: string,
+  fingerprintsRoot = HOST_FINGERPRINTS_DIR,
+): Record<string, unknown> {
+  return readHostFingerprintStore(appId, fingerprintsRoot).fingerprints;
+}
+
+export function writeHostFingerprints(
+  appId: string,
+  fingerprints: Record<string, unknown>,
+  fingerprintsRoot = HOST_FINGERPRINTS_DIR,
+): void {
+  const store: HostFingerprintStore = { schemaVersion: 1, appId, fingerprints };
+  const fingerprintsPath = getHostFingerprintsPath(appId, fingerprintsRoot);
+  mkdirSync(dirname(fingerprintsPath), { recursive: true });
+  writeAtomically(fingerprintsPath, store);
 }
 
 function readSession(sessionPath: string): SessionRecord | null {

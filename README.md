@@ -48,6 +48,21 @@ landmarks, selector stability, bounds, and computed-style samples. Because
 visible labels and text may appear in the JSON and screenshots, inspection
 output should be treated as private user data.
 
+## Semantic Host Roles
+
+Manifest-v2 attunements should bind to semantic host roles and style the stable
+`data-attune-host-roles` attribute instead of depending on generated classes or
+exact DOM paths. The agent-readable role catalog and the per-app resolver
+registries are maintained in [`src/host-roles.ts`](src/host-roles.ts).
+
+When a deterministic resolver succeeds, Attune records a multi-signal element
+fingerprint under `~/.attune/host-fingerprints/`. If a later app version breaks
+the resolver, Attune compares candidate elements using accessibility metadata,
+stable attributes, text, ancestry, class tokens, and geometry. A fallback is
+accepted only when it clears both the confidence threshold and the runner-up by
+a safe margin. Ambiguous matches remain unavailable and are exposed through the
+attunement compatibility report rather than being applied silently.
+
 ## Included Styles
 
 - [Spotify Vinyl Archive](examples/spotify-vinyl-archive.css)
