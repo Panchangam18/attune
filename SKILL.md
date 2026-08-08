@@ -1,74 +1,56 @@
 ---
 name: attune
-description: Safely restyle installed Chromium desktop apps with live CSS while preserving code signatures. Use when an agent needs to change the appearance of an Electron or compatible CEF app such as Slack, Visual Studio Code, Spotify, or Discord; create or refine app-specific CSS; launch an app with a local DevTools session; or verify a desktop UI restyle with a screenshot.
+description: Restyle installed Chromium desktop apps through Attune's stable semantic UI map and verified live CSS without modifying app bundles. Use for visual or layout changes to Electron or compatible CEF apps such as ChatGPT, Slack, Cursor, Visual Studio Code, Spotify, or Discord; for discovering a live app's styleable elements; or for creating and verifying app-specific CSS.
 ---
 
 # Attune
 
-Use Attune to apply CSS to Chromium renderers without modifying the target app's bundle. Work from the Attune repository or an installed `attune` command.
+Use Attune's semantic element map instead of reverse-engineering generated DOM classes. Keep the target app bundle and code signature untouched.
 
-## Operating Rules
+## Fastest path
 
-- Support Electron and compatible Chromium Embedded Framework (CEF) apps discovered by `attune scan` on macOS. Do not treat native macOS apps or browser tabs as Attune targets.
-- Keep the target app bundle untouched. Never edit `app.asar`, alter an app's code signature, or use DevTools to run user-supplied JavaScript.
-- Ask for explicit consent before closing a running app. A normal quit may surface an unsaved-work prompt; never force-quit to make styling work.
-- Bind only to Attune's loopback workflow. Do not expose the DevTools port to the network.
-- Preserve usability: maintain readable contrast, keyboard focus, and essential controls. Prefer scoped visual changes over hiding or disabling UI.
+Use the fewest calls that preserve correctness when the app is already Open in Attune:
 
-## Workflow
+- If the user supplies an exact semantic selector or role, call `style --css` directly. It validates the attached session, applies the CSS, and verifies the role mapping in one call.
+- Otherwise, make the change in exactly two calls:
 
-1. Confirm the desired app, visual intent, and whether the user wants the existing running instance restarted. Inspect the app with `attune scan`.
-2. Build Attune if necessary:
+1. Get the bounded semantic editing surface:
 
    ```sh
-   npm install
-   npm run build
+   attune elements "App Name"
    ```
 
-3. If the app is running, obtain consent and quit it normally. Do not bypass save prompts.
-4. Launch the app, wait for `status` to report `attached`, then inspect the live renderer:
+   Use the returned `elements[].selector` values, geometry, and key computed styles. These selectors use stable `data-attune-host-roles` mappings. Ignore unavailable roles.
+
+2. Submit and verify CSS directly:
 
    ```sh
-   attune launch "App Name"
-   attune status "App Name"
-   attune inspect "App Name"
+   attune style "App Name" --css '[data-attune-host-roles~="app.role"] { /* change */ }'
    ```
 
-   `inspect` returns compact JSON containing the primary screenshot, viewport,
-   and a small selector sample. Complete context is saved at the returned
-   temporary JSON path and expires after 24 hours. Read only the targeted
-   details needed for the edit. Use `--full` only when compact context is
-   insufficient, or `--output <directory>` when artifacts must be retained.
-   Inspection may include text visible in the app; treat it as private user data.
-5. Create or update a named CSS file from the inspection. Prefer high-stability
-   semantic selectors; use structural selectors only when necessary.
-6. Register the stylesheet:
+   `style` infers referenced semantic roles, persists their bindings across renderer reloads, applies the CSS, and verifies the live style hash and role mappings. Do not add a separate file-write or verification call unless the result reports a failure.
 
-   ```sh
-   attune set-css "App Name" /absolute/path/to/style.css
-   ```
+Do not prepend `scan`, `status`, `roles`, or `inspect` to either fast path. Do not create a CSS file for a simple change. If the command reports that no attached session exists, ask the user to open the app through Attune. Obtain explicit consent before closing or relaunching a running app; never force-quit or bypass an unsaved-work prompt.
 
-   When running from this repository, use `node dist/cli.js` in place of `attune`.
-7. Run `inspect` again after each significant edit and compare the new
-   screenshot with the intended result. Attune polls the source CSS and
-   reinjects it without restarting the app.
+## Command separation
 
-## Styling Guidance
+- `elements <app>`: default agent context for discovering live UI roles; semantic, bounded, and text-only. Add `--visual` only when visual judgment is necessary.
+- `style <app> --css <css>`: direct, verified application. Use `--file <path>` to submit CSS that already exists in a file. Use `--clear` to remove Attune-managed CSS.
+- `inspect <app>`: screenshot and raw-selector diagnostics with a larger visible-element sample. Use only when the semantic surface is insufficient, visual judgment is necessary, or a resolver must be debugged. Its artifacts may contain private visible text and expire after 24 hours unless `--output` is supplied.
+- `roles [app]`: static role catalog. Use when authoring or extending Attune resolvers, not for routine styling.
+- `scan`, `status`, `launch`, `attach`, `stop`: session administration and troubleshooting, not normal styling steps.
+- `set-css <app> <file>`: legacy/source-file workflow for extended manual iteration.
 
-- Prefer CSS variables and class or data selectors owned by the target app.
-- Use `!important` sparingly but deliberately for application theme tokens that override inline or high-specificity rules.
-- Give every style a clear name and keep it in a durable user-controlled location rather than a temporary file.
-- Inspect the UI before styling and after each significant change. Chromium app
-  DOM structures change across releases, so treat selectors as app-version-specific.
+## Styling rules
 
-## Verify and Undo
+- Prefer selectors returned by `elements`; do not guess role names.
+- Preserve readable contrast, keyboard focus, scrolling, and essential controls.
+- Scope changes narrowly. Use `!important` only for host theme tokens or specificity that requires it.
+- Do not hide or disable functionality unless the user explicitly requests it.
 
-- Use `attune status "App Name"` to confirm a live session and its renderer target count.
-- To remove styling from an open app, first clear the CSS file and wait for the session to report `attached`; Attune then removes its managed style element. Run `attune stop "App Name"` afterward to end the watcher.
-- `stop` alone only ends future updates. The currently injected style remains until the renderer reloads or the app closes.
+## Safety boundaries
 
-## Boundaries
-
-- **Electron and compatible CEF desktop apps:** supported through launch-time localhost DevTools.
-- **Safari and other websites:** require a browser extension workflow, not this runtime.
-- **Native apps such as Notes:** do not have an HTML/CSS renderer for Attune to target. Do not attempt bundle patching or native code injection.
+- Target only Electron and compatible Chromium Embedded Framework apps discovered by Attune on macOS.
+- Never edit `app.asar`, modify the target bundle, alter its code signature, expose DevTools to the network, or execute user-supplied JavaScript through DevTools.
+- Treat labels, text, screenshots, and inspection artifacts as private user data.
+- Native macOS apps such as Notes are unsupported. Safari and browser tabs require their extension workflows.

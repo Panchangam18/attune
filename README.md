@@ -34,6 +34,19 @@ node dist/cli.js status "Spotify"
 node dist/cli.js inspect "Spotify"
 ```
 
+For agent-driven UI changes, prefer the semantic two-command workflow:
+
+```sh
+attune elements "Slack"
+attune style "Slack" --css '[data-attune-host-roles~="slack.composer"] { border-radius: 12px; }'
+```
+
+`elements` returns a bounded live map of stable host roles, geometry, and key
+styles. Add `--visual` only when a screenshot is necessary. `style` extracts the referenced roles, persists their
+bindings with the CSS, and verifies the result in the attached renderer. Use
+`inspect` separately for raw selector diagnostics and `roles` for the static
+semantic catalog.
+
 `launch` starts the ordinary app executable with a localhost-only DevTools port.
 The Attune sidecar discovers its renderer windows and manages one stylesheet in
 each. Saving the source CSS file applies edits live; the app bundle, ASAR files,

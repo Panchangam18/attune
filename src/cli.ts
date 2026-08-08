@@ -3,8 +3,21 @@
 import { existsSync, readFileSync } from 'fs';
 import { resolve } from 'path';
 import { setStylesheetSource } from './config.js';
+import { buildAgentStyleSource, getRoleCatalogForApp } from './agent-ui.js';
+import { HOST_ROLE_CATALOG } from './host-roles.js';
 import { scanForSupportedApps, findApp, getAppId } from './scan.js';
-import { attach, compactInspection, getSession, inspect, launch, runWatcher, stopSession } from './session.js';
+import {
+  attach,
+  compactInspection,
+  compactSemanticElements,
+  elements,
+  getSession,
+  inspect,
+  launch,
+  runWatcher,
+  stopSession,
+  waitForSemanticStyle,
+} from './session.js';
 
 const [, , command, ...args] = process.argv;
 void main(command, args);
@@ -16,6 +29,9 @@ async function main(command: string | undefined, args: string[]) {
       break;
     case 'set-css':
       cmdSetCSS(args[0], args[1]);
+      break;
+    case 'style':
+      await cmdStyle(args);
       break;
     case 'launch':
       await cmdLaunch(args[0]);
@@ -32,11 +48,78 @@ async function main(command: string | undefined, args: string[]) {
     case 'inspect':
       await cmdInspect(args);
       break;
+    case 'elements':
+      await cmdElements(args);
+      break;
+    case 'roles':
+      cmdRoles(args[0]);
+      break;
     case '_watch':
       await cmdWatch(args[0], args[1], args[2]);
       break;
     default:
       printUsage();
+  }
+}
+
+async function cmdStyle(args: string[]) {
+  const query = args[0];
+  const cssIndex = args.indexOf('--css');
+  const fileIndex = args.indexOf('--file');
+  const clear = args.includes('--clear');
+  const modeCount = Number(cssIndex >= 0) + Number(fileIndex >= 0) + Number(clear);
+  if (!query || modeCount !== 1) {
+    console.error('Usage: attune style <app-name> (--css <css> | --file <path> | --clear)');
+    process.exit(1);
+  }
+
+  const app = findApp(scanForSupportedApps(), query);
+  if (!app) {
+    console.error(`No supported Chromium app found matching "${query}".`);
+    process.exit(1);
+  }
+
+  let css = '';
+  if (cssIndex >= 0) {
+    if (args[cssIndex + 1] === undefined) {
+      console.error('Usage: attune style <app-name> --css <css>');
+      process.exit(1);
+    }
+    css = args[cssIndex + 1];
+  } else if (fileIndex >= 0) {
+    const filePath = args[fileIndex + 1];
+    if (!filePath) {
+      console.error('Usage: attune style <app-name> --file <path>');
+      process.exit(1);
+    }
+    const resolvedPath = resolve(filePath);
+    if (!existsSync(resolvedPath)) {
+      console.error(`CSS file not found: ${resolvedPath}`);
+      process.exit(1);
+    }
+    css = readFileSync(resolvedPath, 'utf8');
+  }
+
+  try {
+    const session = getSession(getAppId(app));
+    if (!session || session.status !== 'attached') {
+      throw new Error(`No attached Attune session is available. Open "${app.name}" through Attune App first.`);
+    }
+    const style = buildAgentStyleSource(getAppId(app), app.name, css);
+    setStylesheetSource(getAppId(app), '', style.source);
+    const verification = await waitForSemanticStyle(app, style.css, style.roles);
+    console.log(JSON.stringify({
+      appId: getAppId(app),
+      appName: app.name,
+      cssLength: style.css.length,
+      semanticRoles: style.roles,
+      ...verification,
+      message: clear ? 'Attune-managed CSS removed.' : 'CSS saved and verified in the live renderer.',
+    }, null, 2));
+    if (!verification.applied || verification.unavailableRoles.length) process.exitCode = 1;
+  } catch (error: unknown) {
+    console.error(`Failed to style "${app.name}":`, (error as Error).message);
+    process.exit(1);
   }
 }
 
@@ -195,6 +278,49 @@ async function cmdInspect(args: string[]) {
   }
 }
 
+async function cmdElements(args: string[]) {
+  const query = args[0];
+  if (!query) {
+    console.error('Usage: attune elements <app-name> [--visual [--output <directory>]]');
+    process.exit(1);
+  }
+  const outputIndex = args.indexOf('--output');
+  const outputDirectory = outputIndex >= 0 ? args[outputIndex + 1] : undefined;
+  const visual = args.includes('--visual');
+  if (outputIndex >= 0 && (!outputDirectory || !visual)) {
+    console.error('Usage: attune elements <app-name> [--visual [--output <directory>]]');
+    process.exit(1);
+  }
+  const app = findApp(scanForSupportedApps(), query);
+  if (!app) {
+    console.error(`No supported Chromium app found matching "${query}".`);
+    process.exit(1);
+  }
+  try {
+    const result = await elements(app, {
+      visual,
+      outputDirectory: outputDirectory ? resolve(outputDirectory) : undefined,
+    });
+    console.log(JSON.stringify(compactSemanticElements(result), null, 2));
+  } catch (error: unknown) {
+    console.error(`Failed to get elements for "${app.name}":`, (error as Error).message);
+    process.exit(1);
+  }
+}
+
+function cmdRoles(query: string | undefined) {
+  let catalog = HOST_ROLE_CATALOG;
+  if (query) {
+    const app = findApp(scanForSupportedApps(), query);
+    catalog = app
+      ? getRoleCatalogForApp(app.name, app.bundleId)
+      : Object.fromEntries(Object.entries(HOST_ROLE_CATALOG).filter(([, entry]) => (
+        entry.app.toLowerCase().includes(query.toLowerCase())
+      )));
+  }
+  console.log(JSON.stringify(catalog, null, 2));
+}
+
 async function cmdWatch(configPath: string | undefined, rawPort: string | undefined, sessionPath: string | undefined) {
   const port = Number(rawPort);
   if (!configPath || !sessionPath || !Number.isInteger(port) || port <= 0 || port > 65535) {
@@ -211,10 +337,17 @@ attune — Dynamic UI customization for Chromium desktop apps
 Usage:
   attune scan                        Scan supported Chromium desktop apps
   attune set-css <app-name> <file>   Set custom CSS for an app
+  attune elements <app-name>         Return the bounded semantic editing surface
+    --visual                         Include a temporary screenshot
+    --output <directory>             Keep the --visual screenshot in a chosen directory
+  attune style <app-name> --css CSS  Save and verify CSS against semantic roles
+    --file <path>                    Read CSS from a durable file instead
+    --clear                          Remove Attune-managed CSS
+  attune roles [app-name]            List the static semantic role catalog
   attune launch <app-name>           Launch without modifying the app bundle
   attune attach <app-name> <port>    Attach to an app already running with DevTools
   attune status <app-name>           Show an Attune session
-  attune inspect <app-name>          Return compact context; artifacts expire after 24 hours
+  attune inspect <app-name>          Return raw selector diagnostics; artifacts expire after 24 hours
     --full                           Print the complete inspection JSON
     --output <directory>             Keep inspection artifacts in a chosen directory
   attune stop <app-name>             Stop applying styles to a session

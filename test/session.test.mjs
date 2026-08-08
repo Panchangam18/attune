@@ -9,8 +9,11 @@ import { getChromiumRuntime } from '../dist/scan.js';
 import { HOST_ROLE_CATALOG } from '../dist/host-roles.js';
 import {
   buildInspectionExpression,
+  buildSemanticElementsExpression,
+  buildSemanticStyleProbeExpression,
   buildStyleInjectionExpression,
   compactInspection,
+  compactSemanticElements,
   readHostFingerprints,
   resolveClaudeCliPath,
   shouldEnableClaudeCodexProxy,
@@ -44,6 +47,47 @@ test('inspection expression is valid JavaScript and requests agent-relevant cont
   assert.match(expression, /Page|viewport|elements/);
   assert.match(expression, /data-testid/);
   assert.match(expression, /attuneStylePresent/);
+});
+
+test('semantic elements expression is valid, bounded, and publishes stable role selectors', () => {
+  const expression = buildSemanticElementsExpression({
+    'slack.composer': { app: 'Slack', description: 'The message composer.' },
+  });
+  assert.doesNotThrow(() => new vm.Script(expression));
+  assert.match(expression, /__attune-agent-elements/);
+  assert.match(expression, /data-attune-host-roles/);
+  assert.match(expression, /mapper\.request/);
+  assert.match(expression, /Object\.entries\(catalog\)\.flatMap/);
+  assert.match(expression, /slice\(0, length\)/);
+});
+
+test('semantic style probe validates CSS and requested role mappings without arbitrary input', () => {
+  const expression = buildSemanticStyleProbeExpression('expected-hash', ['slack.composer']);
+  assert.doesNotThrow(() => new vm.Script(expression));
+  assert.match(expression, /expected-hash/);
+  assert.match(expression, /slack\.composer/);
+  assert.match(expression, /__attuneHost/);
+});
+
+test('semantic element output omits screenshot artifacts unless visual capture was requested', () => {
+  const compact = compactSemanticElements({
+    appId: 'com.example.app',
+    appName: 'Example',
+    capturedAt: '2026-08-07T00:00:00.000Z',
+    ephemeral: false,
+    expiresAt: null,
+    session: { status: 'attached', port: 12345, targetCount: 1 },
+    pages: [{
+      title: 'Example',
+      url: 'app://example',
+      viewport: { width: 1280, height: 800, deviceScaleFactor: 2 },
+      screenshotPath: null,
+      compatibility: 'compatible',
+      elements: [],
+      unavailableRoles: [],
+    }],
+  });
+  assert.equal('artifacts' in compact, false);
 });
 
 test('compact inspection bounds immediate agent context', () => {
@@ -401,6 +445,8 @@ function createFingerprintRenderer(candidates, deterministicCandidates = []) {
       console,
       innerWidth: 1000,
       innerHeight: 800,
+      devicePixelRatio: 2,
+      location: { href: 'app://test' },
       MutationObserver,
       CustomEvent,
       getComputedStyle: () => ({ display: 'block', visibility: 'visible' }),
@@ -409,6 +455,27 @@ function createFingerprintRenderer(candidates, deterministicCandidates = []) {
     },
   };
 }
+
+test('semantic elements resolve a live host role and return its stable CSS selector', () => {
+  const composer = {
+    name: 'composer', isConnected: true, tagName: 'DIV', textContent: 'Message', innerText: 'Message',
+    parentElement: null, classList: ['message-composer'],
+    getAttribute(name) { return name === 'role' ? 'textbox' : name === 'aria-label' ? 'Message' : ''; },
+    hasAttribute() { return false; }, querySelector() { return null; }, querySelectorAll() { return []; },
+    setAttribute() {}, removeAttribute() {},
+    getBoundingClientRect() { return { x: 100, y: 700, width: 700, height: 60 }; },
+  };
+  const renderer = createFingerprintRenderer([], [composer]);
+  const result = vm.runInNewContext(buildSemanticElementsExpression({
+    'slack.composer': { app: 'Slack', description: 'The message composer.' },
+  }), renderer.context);
+
+  assert.equal(result.elements.length, 1);
+  assert.equal(result.elements[0].role, 'slack.composer');
+  assert.equal(result.elements[0].selector, '[data-attune-host-roles~="slack.composer"]');
+  assert.equal(result.elements[0].resolution.method, 'deterministic');
+  assert.equal(result.unavailableRoles.length, 0);
+});
 
 const slackComposerSource = `/* @attune-bindings
 {"schemaVersion":1,"attunementId":"slack-test","appName":"Slack","bindings":[{"name":"composer","role":"slack.composer","required":true}]}

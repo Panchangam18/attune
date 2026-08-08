@@ -12,6 +12,7 @@ import {
   getHostMapperInstallerSource,
   HOST_MAPPER_VERSION,
 } from './host-roles.js';
+import { getRoleCatalogForApp } from './agent-ui.js';
 import { type DiscoveredApp, getAppExecutablePath, getAppId } from './scan.js';
 
 export { buildHostFingerprintProbeExpression };
@@ -116,6 +117,55 @@ export interface AppInspection {
   expiresAt: string | null;
   session: Pick<SessionRecord, 'status' | 'port' | 'targetCount'>;
   pages: PageInspection[];
+}
+
+export interface SemanticElement {
+  role: string;
+  description: string;
+  selector: string;
+  tag: string;
+  label: string;
+  text: string;
+  bounds: { x: number; y: number; width: number; height: number };
+  styles: {
+    display: string;
+    position: string;
+    color: string;
+    backgroundColor: string;
+    fontSize: string;
+  };
+  resolution: {
+    method: 'deterministic' | 'fingerprint' | 'unavailable';
+    confidence: number;
+    evidence: string[];
+  };
+}
+
+export interface SemanticElementsPage {
+  title: string;
+  url: string;
+  viewport: { width: number; height: number; deviceScaleFactor: number };
+  screenshotPath: string | null;
+  compatibility: 'compatible' | 'degraded' | 'unavailable';
+  elements: SemanticElement[];
+  unavailableRoles: string[];
+}
+
+export interface AppSemanticElements {
+  appId: string;
+  appName: string;
+  capturedAt: string;
+  ephemeral: boolean;
+  expiresAt: string | null;
+  session: Pick<SessionRecord, 'status' | 'port' | 'targetCount'>;
+  pages: SemanticElementsPage[];
+}
+
+export interface AppliedStyleResult {
+  applied: boolean;
+  targetCount: number;
+  mappedRoles: string[];
+  unavailableRoles: string[];
 }
 
 export interface HostBinding {
@@ -320,6 +370,17 @@ export function getSession(appId: string): SessionRecord | null {
   return readSession(getSessionPath(appId));
 }
 
+function requireAttachedSession(app: DiscoveredApp): SessionRecord {
+  const session = getSession(getAppId(app));
+  if (!session) {
+    throw new Error(`No Attune session is running for "${app.name}". Open it through Attune App or launch it with consent first.`);
+  }
+  if (session.status !== 'attached') {
+    throw new Error(`Attune for "${app.name}" is ${session.status}; wait for status "attached" and try again.`);
+  }
+  return session;
+}
+
 /**
  * Give an agent a bounded view of the live renderer: a screenshot, viewport,
  * and visible selector candidates. This is intentionally not a full DOM dump.
@@ -329,13 +390,7 @@ export async function inspect(
   outputDirectory?: string,
 ): Promise<AppInspection> {
   const appId = getAppId(app);
-  const session = getSession(appId);
-  if (!session) {
-    throw new Error(`No Attune session is running for "${app.name}". Launch or attach it first.`);
-  }
-  if (session.status !== 'attached') {
-    throw new Error(`Attune for "${app.name}" is ${session.status}; wait for status "attached" and try again.`);
-  }
+  const session = requireAttachedSession(app);
 
   const targets = (await getDebugTargets(session.port))
     .filter(target => target.type === 'page' && target.webSocketDebuggerUrl);
@@ -400,6 +455,146 @@ export async function inspect(
   };
   writeFileSync(inspectionPath, JSON.stringify(result, null, 2));
   return result;
+}
+
+/** Return the stable semantic editing surface without exposing a raw DOM dump. */
+export async function elements(
+  app: DiscoveredApp,
+  options: { outputDirectory?: string; visual?: boolean } = {},
+): Promise<AppSemanticElements> {
+  const appId = getAppId(app);
+  const session = requireAttachedSession(app);
+  const targets = (await getDebugTargets(session.port))
+    .filter(target => target.type === 'page' && target.webSocketDebuggerUrl);
+  if (targets.length === 0) {
+    throw new Error(`No semantic page targets are available for "${app.name}".`);
+  }
+
+  const visual = options.visual === true;
+  if (visual) cleanupExpiredInspections();
+  const ephemeral = visual && !options.outputDirectory;
+  const resolvedOutputDirectory = visual
+    ? options.outputDirectory ?? mkdtempSync(join(tmpdir(), INSPECTION_TEMP_PREFIX))
+    : null;
+  if (resolvedOutputDirectory) mkdirSync(resolvedOutputDirectory, { recursive: true });
+  const capturedAt = new Date().toISOString();
+  const expiresAt = ephemeral ? new Date(Date.now() + INSPECTION_TTL_MS).toISOString() : null;
+  const prefix = `${slugify(app.name)}-elements-${capturedAt.replace(/[:.]/g, '-')}`;
+  const roleCatalog = getRoleCatalogForApp(app.name, app.bundleId);
+  const requestedRoles = Object.keys(roleCatalog);
+  const savedFingerprints = readHostFingerprints(appId);
+  const pages: SemanticElementsPage[] = [];
+  let learnedFingerprints = savedFingerprints;
+
+  for (const [index, target] of targets.entries()) {
+    const evaluated = await sendDevToolsCommand<{
+      result?: { value?: Omit<SemanticElementsPage, 'screenshotPath'> & { fingerprints?: Record<string, unknown> } };
+      exceptionDetails?: unknown;
+    }>(target.webSocketDebuggerUrl!, 'Runtime.evaluate', {
+      expression: buildSemanticElementsExpression(roleCatalog, savedFingerprints),
+      returnByValue: true,
+    });
+    if (evaluated.exceptionDetails || !evaluated.result?.value) continue;
+
+    let screenshotPath: string | null = null;
+    if (resolvedOutputDirectory) {
+      const screenshot = await sendDevToolsCommand<{ data?: string }>(
+        target.webSocketDebuggerUrl!,
+        'Page.captureScreenshot',
+        { format: 'png', fromSurface: true },
+      );
+      if (screenshot.data) {
+        screenshotPath = join(resolvedOutputDirectory, `${prefix}-page-${index + 1}.png`);
+        writeFileSync(screenshotPath, Buffer.from(screenshot.data, 'base64'));
+      }
+    }
+    const { fingerprints, ...page } = evaluated.result.value;
+    if (fingerprints) learnedFingerprints = { ...learnedFingerprints, ...fingerprints };
+    pages.push({ ...page, screenshotPath });
+  }
+
+  if (pages.length === 0) {
+    throw new Error(`Attune could not capture semantic elements for "${app.name}".`);
+  }
+  if (requestedRoles.length > 0) writeHostFingerprints(appId, learnedFingerprints);
+  return {
+    appId,
+    appName: app.name,
+    capturedAt,
+    ephemeral,
+    expiresAt,
+    session: { status: session.status, port: session.port, targetCount: session.targetCount },
+    pages,
+  };
+}
+
+export function compactSemanticElements(result: AppSemanticElements) {
+  const primaryPage = [...result.pages].sort((left, right) => (
+    right.elements.filter(element => !element.role.startsWith('document.')).length
+      - left.elements.filter(element => !element.role.startsWith('document.')).length
+  ))[0];
+  return {
+    appId: result.appId,
+    appName: result.appName,
+    capturedAt: result.capturedAt,
+    session: result.session,
+    ...(primaryPage.screenshotPath ? {
+      artifacts: {
+        screenshotPath: primaryPage.screenshotPath,
+        ephemeral: result.ephemeral,
+        expiresAt: result.expiresAt,
+      },
+    } : {}),
+    viewport: primaryPage.viewport,
+    compatibility: primaryPage.compatibility,
+    elements: primaryPage.elements,
+    unavailableRoles: primaryPage.unavailableRoles,
+    cssSelectorPattern: '[data-attune-host-roles~="<role>"]',
+  };
+}
+
+export async function waitForSemanticStyle(
+  app: DiscoveredApp,
+  css: string,
+  roles: string[],
+  timeoutMs = 6000,
+): Promise<AppliedStyleResult> {
+  const session = requireAttachedSession(app);
+  const expectedHash = hashValue(css.trim());
+  const startedAt = Date.now();
+  let lastResult: AppliedStyleResult = {
+    applied: false,
+    targetCount: 0,
+    mappedRoles: [],
+    unavailableRoles: roles,
+  };
+
+  while (Date.now() - startedAt < timeoutMs) {
+    const targets = (await getDebugTargets(session.port))
+      .filter(target => target.type === 'page' && target.webSocketDebuggerUrl);
+    const pageResults = await Promise.allSettled(targets.map(async target => {
+      const evaluated = await sendDevToolsCommand<{
+        result?: { value?: { applied?: boolean; mappedRoles?: string[] } };
+      }>(target.webSocketDebuggerUrl!, 'Runtime.evaluate', {
+        expression: buildSemanticStyleProbeExpression(expectedHash, roles),
+        returnByValue: true,
+      });
+      return evaluated.result?.value;
+    }));
+    const values = pageResults.flatMap(result => (
+      result.status === 'fulfilled' && result.value ? [result.value] : []
+    ));
+    const mappedRoles = [...new Set(values.flatMap(value => value.mappedRoles ?? []))].sort();
+    lastResult = {
+      applied: values.length > 0 && values.every(value => value.applied === true),
+      targetCount: values.length,
+      mappedRoles,
+      unavailableRoles: roles.filter(role => !mappedRoles.includes(role)),
+    };
+    if (lastResult.applied) return lastResult;
+    await delay(200);
+  }
+  return lastResult;
 }
 
 export function compactInspection(inspection: AppInspection) {
@@ -1329,6 +1524,83 @@ export function splitWorkspaceSource(source: string): {
     script: scripts.join('\n;\n'),
     bindingSets,
   };
+}
+
+export function buildSemanticElementsExpression(
+  roleCatalog: Record<string, { app: string; description: string }>,
+  savedFingerprints: Record<string, unknown> = {},
+): string {
+  const safeRoleCatalog = JSON.stringify(roleCatalog);
+  const safeFingerprints = JSON.stringify(savedFingerprints);
+  const safeInstaller = getHostMapperInstallerSource();
+  return `(() => {
+  const catalog = ${safeRoleCatalog};
+  const bindingSet = {
+    schemaVersion: 2,
+    attunementId: '__attune-agent-elements',
+    appName: document.title || 'App',
+    bindings: Object.keys(catalog).map(role => ({ name: role, role, required: false })),
+  };
+  let mapper = window.__attuneHost;
+  if (!mapper || typeof mapper.request !== 'function') {
+    try { mapper?.cleanup?.(); } catch {}
+    mapper = (${safeInstaller})([], ${safeFingerprints});
+    window.__attuneHost = mapper;
+  }
+  const report = mapper.request(bindingSet) || { status: 'unavailable', capabilities: {} };
+  const clean = (value, length = 120) => String(value || '').replace(/\s+/g, ' ').trim().slice(0, length);
+  const elements = Object.entries(catalog).flatMap(([role, definition]) => {
+    const element = mapper.resolve(role);
+    if (!element) return [];
+    const bounds = element.getBoundingClientRect();
+    const style = getComputedStyle(element);
+    const capability = report.capabilities?.[role] || {};
+    return [{
+      role,
+      description: definition.description,
+      selector: '[data-attune-host-roles~=' + JSON.stringify(role) + ']',
+      tag: element.tagName?.toLowerCase?.() || '',
+      label: clean(element.getAttribute?.('aria-label') || element.getAttribute?.('title') || element.getAttribute?.('placeholder')),
+      text: clean(element.innerText || element.textContent),
+      bounds: {
+        x: Math.round(bounds.x), y: Math.round(bounds.y),
+        width: Math.round(bounds.width), height: Math.round(bounds.height),
+      },
+      styles: {
+        display: style.display, position: style.position, color: style.color,
+        backgroundColor: style.backgroundColor, fontSize: style.fontSize,
+      },
+      resolution: {
+        method: capability.method || 'unavailable',
+        confidence: capability.confidence || 0,
+        evidence: capability.evidence || [],
+      },
+    }];
+  });
+  return {
+    title: document.title,
+    url: location.href,
+    viewport: { width: innerWidth, height: innerHeight, deviceScaleFactor: devicePixelRatio },
+    compatibility: report.status,
+    elements,
+    unavailableRoles: Object.keys(catalog).filter(role => !mapper.resolve(role)),
+    fingerprints: mapper.fingerprints?.() || {},
+  };
+})()`;
+}
+
+export function buildSemanticStyleProbeExpression(expectedStyleHash: string, roles: string[]): string {
+  const safeHash = JSON.stringify(expectedStyleHash);
+  const safeRoles = JSON.stringify(roles);
+  const expectRemoval = JSON.stringify(expectedStyleHash === hashValue(''));
+  return `(() => {
+    const style = document.getElementById(${JSON.stringify(STYLE_ELEMENT_ID)});
+    const roles = ${safeRoles};
+    return {
+      applied: ${expectRemoval} ? !style : style?.dataset?.attuneHash === ${safeHash},
+      mappedRoles: roles.filter(role => Boolean(window.__attuneHost?.resolve?.(role))),
+    };
+  })()`;
 }
 
 export function buildInspectionExpression(): string {

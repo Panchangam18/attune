@@ -35,7 +35,7 @@ export const HOST_ROLE_CATALOG: Record<string, HostRoleCatalogEntry> = {
   'youtube.player': { app: 'YouTube', description: 'The primary video player.' },
 };
 
-export const HOST_MAPPER_VERSION = 3;
+export const HOST_MAPPER_VERSION = 4;
 
 /**
  * This function is serialized into the target renderer. Keep it self-contained:
@@ -349,7 +349,14 @@ function installHostMapper(bindingSets: unknown[], savedFingerprints: Record<str
     }
   };
 
-  const requestedRoles = new Set((bindingSets as Array<{ bindings?: Array<{ role?: string }> }>)
+  type ActiveBindingSet = {
+    schemaVersion: number;
+    attunementId: string;
+    appName: string;
+    bindings: Array<{ name: string; role: string; required: boolean }>;
+  };
+  let activeBindingSets = bindingSets as ActiveBindingSet[];
+  const requestedRoles = new Set(activeBindingSets
     .flatMap(set => set.bindings || []).map(binding => binding.role).filter((role): role is string => Boolean(role)));
   const setElementRoles = (element: ElementLike, roles: Set<string>) => {
     if (roles.size) element.setAttribute('data-attune-host-roles', [...roles].sort().join(' '));
@@ -374,10 +381,7 @@ function installHostMapper(bindingSets: unknown[], savedFingerprints: Record<str
       if (!rolesByElement.has(element)) setElementRoles(element, new Set());
     }
     for (const [element, roles] of rolesByElement) setElementRoles(element, roles);
-    const reports = Object.fromEntries((bindingSets as Array<{
-      schemaVersion: number; attunementId: string; appName: string;
-      bindings: Array<{ name: string; role: string; required: boolean }>;
-    }>).map(set => {
+    const reports = Object.fromEntries(activeBindingSets.map(set => {
       const capabilities = Object.fromEntries(set.bindings.map(binding => {
         const resolution = resolutions.get(binding.role);
         return [binding.name, {
@@ -424,6 +428,19 @@ function installHostMapper(bindingSets: unknown[], savedFingerprints: Record<str
     roles: () => Object.keys(registry),
     report: (attunementId: string) => (window as any).__attuneCompatibilityReports?.[attunementId] || null,
     fingerprints: () => Object.fromEntries(learnedFingerprints),
+    request: (set: ActiveBindingSet) => {
+      if (!set || typeof set.attunementId !== 'string' || !Array.isArray(set.bindings)) return null;
+      const validBindings = set.bindings.filter(binding => (
+        binding && typeof binding.name === 'string' && typeof binding.role === 'string'
+      ));
+      activeBindingSets = [
+        ...activeBindingSets.filter(candidate => candidate.attunementId !== set.attunementId),
+        { ...set, bindings: validBindings },
+      ];
+      for (const binding of validBindings) requestedRoles.add(binding.role);
+      reconcile();
+      return (window as any).__attuneCompatibilityReports?.[set.attunementId] || null;
+    },
     subscribe: (listener: (roles: string[]) => void) => {
       if (typeof listener !== 'function') return () => {};
       listeners.add(listener);

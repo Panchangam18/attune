@@ -10,11 +10,16 @@ test('agent skill has complete metadata and safety boundaries', () => {
 
   assert.match(skill, /^---\nname: attune\ndescription: .+\n---/);
   assert.doesNotMatch(skill, /TODO/);
+  assert.match(skill, /attune elements "App Name"/);
+  assert.match(skill, /attune style "App Name" --css/);
+  assert.match(skill, /exactly two calls/);
+  assert.match(skill, /one call/);
+  assert.match(skill, /Do not prepend `scan`, `status`, `roles`, or `inspect`/);
   assert.match(skill, /Never edit `app\.asar`/);
-  assert.match(skill, /Ask for explicit consent before closing a running app/);
-  assert.match(skill, /attune status/);
-  assert.match(skill, /Chromium Embedded Framework \(CEF\)/);
-  assert.match(skill, /Native apps such as Notes/);
+  assert.match(skill, /explicit consent before closing or relaunching/);
+  assert.match(skill, /Chromium Embedded Framework/);
+  assert.match(skill, /Native macOS apps such as Notes/);
+  assert.match(skill, /Command separation/);
 });
 
 test('skill package includes agent metadata and examples', () => {
@@ -27,5 +32,5 @@ test('skill package includes agent metadata and examples', () => {
   assert.ok(packageJson.files.includes('examples'));
   assert.equal(packageJson.dependencies, undefined);
   assert.match(openaiMetadata, /display_name: "Attune"/);
-  assert.match(openaiMetadata, /Use \$attune to restyle an installed Chromium desktop app/);
+  assert.match(openaiMetadata, /Use \$attune to restyle an open Chromium desktop app through its semantic element map/);
 });
