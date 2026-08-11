@@ -23,6 +23,11 @@ export const HOST_ROLE_CATALOG: Record<string, HostRoleCatalogEntry> = {
   'chatgpt.conversation': { app: 'ChatGPT', description: 'The active conversation surface.' },
   'chatgpt.composer': { app: 'ChatGPT', description: 'The prompt composer.' },
   'chatgpt.attachmentMenu': { app: 'ChatGPT', description: 'The attachment or upload menu.' },
+  'claude.appShell': { app: 'Claude', description: 'The Claude Desktop application shell.' },
+  'claude.primaryChat': { app: 'Claude', description: 'The active Claude conversation or Code session.' },
+  'claude.composer': { app: 'Claude', description: 'The Claude prompt composer.' },
+  'claude.sidebar': { app: 'Claude', description: 'The Claude navigation and session sidebar.' },
+  'claude.modelPicker': { app: 'Claude', description: 'The model picker in the Claude composer.' },
   'linear.workspace': { app: 'Linear', description: 'The Linear application workspace.' },
   'linear.issueList': { app: 'Linear', description: 'The visible issue list.' },
   'linear.issueDetail': { app: 'Linear', description: 'The active issue detail surface.' },
@@ -35,7 +40,7 @@ export const HOST_ROLE_CATALOG: Record<string, HostRoleCatalogEntry> = {
   'youtube.player': { app: 'YouTube', description: 'The primary video player.' },
 };
 
-export const HOST_MAPPER_VERSION = 4;
+export const HOST_MAPPER_VERSION = 5;
 
 /**
  * This function is serialized into the target renderer. Keep it self-contained:
@@ -267,6 +272,54 @@ function installHostMapper(bindingSets: unknown[], savedFingerprints: Record<str
     'chatgpt.composer': { description: 'The prompt composer.', candidates: '#prompt-textarea, form, [contenteditable="true"], textarea', resolve: c => c.first('#prompt-textarea, form[data-type="unified-composer"] textarea, form[data-type="unified-composer"] [contenteditable="true"], [contenteditable="true"][role="textbox"], [contenteditable="true"][data-lexical-editor="true"], textarea') },
     'chatgpt.attachmentMenu': { description: 'The attachment menu.', candidates: '[role="menu"], [data-radix-popper-content-wrapper], .popover', resolve: () => ([...document.querySelectorAll('[data-radix-popper-content-wrapper] .popover, div.popover, [role="menu"]')] as ElementLike[]).find(element => visible(element) && /Add photos|Attach|Upload/i.test(element.textContent || '')) || null },
   };
+  const claudeRoles: Record<string, RoleDefinition> = {
+    'claude.composer': {
+      description: 'The Claude prompt composer.',
+      candidates: 'textarea, [contenteditable="true"][role="textbox"], [role="textbox"]',
+      resolve: c => {
+        const editor = c.first('textarea, [contenteditable="true"][role="textbox"], [role="textbox"]');
+        return editor?.closest?.('form, [data-state], section, div') as ElementLike || editor;
+      },
+    },
+    'claude.primaryChat': {
+      description: 'The active Claude conversation or Code session.',
+      candidates: 'main, [role="main"], section, article',
+      resolve: c => {
+        const composer = c.resolve('claude.composer');
+        return composer?.closest?.('main, [role="main"], section') as ElementLike
+          || c.first('main, [role="main"]');
+      },
+    },
+    'claude.sidebar': {
+      description: 'The Claude navigation and session sidebar.',
+      candidates: 'aside, nav, [role="navigation"]',
+      resolve: () => ([...document.querySelectorAll('aside, nav, [role="navigation"]')] as ElementLike[])
+        .find(element => visible(element) && element.getBoundingClientRect().x < globalThis.innerWidth * 0.4)
+        || null,
+    },
+    'claude.appShell': {
+      description: 'The Claude Desktop application shell.',
+      candidates: '#root, body > div, main, [role="main"]',
+      resolve: c => {
+        const main = c.resolve('claude.primaryChat');
+        const sidebar = c.resolve('claude.sidebar');
+        return (main?.parentElement && (!sidebar || main.parentElement.contains(sidebar))
+          ? main.parentElement
+          : sidebar?.parentElement) as ElementLike
+          || document.querySelector('#root, body > div') as ElementLike
+          || null;
+      },
+    },
+    'claude.modelPicker': {
+      description: 'The model picker in the Claude composer.',
+      candidates: 'button[aria-haspopup="menu"], [role="combobox"]',
+      resolve: c => {
+        const composer = c.resolve('claude.composer') || document;
+        const candidates = [...composer.querySelectorAll('button[aria-haspopup="menu"], [role="combobox"]')] as ElementLike[];
+        return candidates.filter(visible).at(-1) || null;
+      },
+    },
+  };
   const linearRoles: Record<string, RoleDefinition> = {
     'linear.workspace': { description: 'The Linear workspace.', candidates: '[data-testid="app-shell"], #root, #app, body', resolve: () => document.querySelector('[data-testid="app-shell"], #root, #app') as ElementLike || document.body as ElementLike },
     'linear.issueList': { description: 'The visible issue list.', candidates: '[role="list"], [data-testid*="list" i], main', resolve: c => c.first('a[href*="/issue/"], a[href*="/team/"]')?.closest?.('[role="list"], [data-testid*="list" i], main') as ElementLike || c.resolve('linear.workspace') },
@@ -286,7 +339,7 @@ function installHostMapper(bindingSets: unknown[], savedFingerprints: Record<str
     'youtube.player': { description: 'The primary video player.', candidates: 'video, #movie_player', resolve: c => c.first('video.html5-main-video, #movie_player video, video') },
   };
   const registry: Record<string, RoleDefinition> = Object.assign(
-    {}, documentRoles, codexRoles, chatgptRoles, linearRoles, slackRoles, cursorRoles, youtubeRoles,
+    {}, documentRoles, codexRoles, chatgptRoles, claudeRoles, linearRoles, slackRoles, cursorRoles, youtubeRoles,
   );
 
   for (const [role, value] of Object.entries(savedFingerprints || {})) {

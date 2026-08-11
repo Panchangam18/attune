@@ -5,7 +5,21 @@ import { homedir, tmpdir } from 'os';
 import { delimiter, dirname, join } from 'path';
 import { createServer } from 'net';
 import { createServer as createHttpServer, type IncomingMessage, type ServerResponse } from 'http';
+import { pathToFileURL } from 'url';
 import { createCodexTaskFromChatGpt, type ChatGptCodexTransfer } from './codex-chatgpt.js';
+import {
+  createClaudeGptTlsRouterReadinessToken,
+  ensureClaudeGptTlsRouter,
+  getClaudeGptTlsRouterEnvironment,
+  waitForClaudeGptTlsRouter,
+  type ClaudeGptTlsRouterHandle,
+} from './claude-gpt-tls-router.js';
+import {
+  createClaudeWebBootstrapProxyReadinessToken,
+  ensureClaudeWebBootstrapProxy,
+  waitForClaudeWebBootstrapProxy,
+  type ClaudeWebBootstrapProxyHandle,
+} from './claude-web-bootstrap-proxy.js';
 import { ensureConfig, readStylesheet } from './config.js';
 import {
   buildHostFingerprintProbeExpression,
@@ -22,6 +36,16 @@ const SESSION_DIR = join(ATTUNE_DIR, 'sessions');
 const WORKSPACE_BRIDGE_PATH = join(ATTUNE_DIR, 'workspace-bridge.json');
 const WORKSPACE_BRIDGE_PORT = 47655;
 const CLAUDE_BRIDGE_TOKEN_KEY = 'claude-code-token';
+const CLAUDE_GPT_MODELS_ENV = 'ATTUNE_CLAUDE_GPT_MODELS_ENABLED';
+const CLAUDE_GPT_ROUTER_READINESS_TOKEN_ENV = 'ATTUNE_CLAUDE_GPT_ROUTER_READINESS_TOKEN';
+const CLAUDE_GPT_ROUTER_HTTP_PORT_ENV = 'ATTUNE_CLAUDE_GPT_ROUTER_HTTP_PORT';
+const CLAUDE_WEB_PROXY_READINESS_TOKEN_ENV = 'ATTUNE_CLAUDE_WEB_PROXY_READINESS_TOKEN';
+const CLAUDE_GPT_BASE_URL_ENV = 'ATTUNE_CLAUDE_GPT_BASE_URL';
+const CLAUDE_GPT_DIAGNOSTICS_PATH_ENV = 'ATTUNE_CLAUDE_GPT_DIAGNOSTICS_PATH';
+const CLAUDE_GPT_DIAGNOSTICS_PATH = join(ATTUNE_DIR, 'logs', 'claude-gpt-routing.jsonl');
+const WATCHER_EXECUTABLE_PATH_ENV = 'ATTUNE_WATCHER_EXECUTABLE_PATH';
+const WATCHER_TOKEN_ENV = 'ATTUNE_WATCHER_TOKEN';
+const WATCHER_APP_ID_ENV = 'ATTUNE_WATCHER_APP_ID';
 const activeClaudeProcesses = new Map<string, ChildProcess>();
 const STYLE_ELEMENT_ID = 'attune-custom-stylesheet';
 const WORKSPACE_SCRIPT_RE = /\/\*\s*@attune-script\s*\n([\s\S]*?)\n\s*@end-attune-script\s*\*\//g;
@@ -80,6 +104,7 @@ export interface SessionRecord {
   targetCount: number;
   updatedAt: string;
   watcherPid: number;
+  watcherToken?: string;
 }
 
 export interface InspectionElement {
@@ -195,44 +220,178 @@ export async function launch(app: DiscoveredApp, cliPath: string): Promise<{ por
 
   stopSession(appId);
   const port = await getAvailablePort();
-  const watcher = spawn(process.execPath, [cliPath, '_watch', configPath, String(port), sessionPath], {
-    detached: true,
-    stdio: 'ignore',
-  });
-  watcher.unref();
-
-  const chromeProfilePath = app.runtime === 'chrome'
-    ? join(ATTUNE_DIR, 'chrome-profiles', appId)
+  const claudeGptModelsEnabled = shouldEnableClaudeGptModels(app.bundleId);
+  let claudeGptRouterHttpPort = claudeGptModelsEnabled ? await getAvailablePort() : null;
+  while (claudeGptRouterHttpPort === port) {
+    claudeGptRouterHttpPort = await getAvailablePort();
+  }
+  const claudeGptRouterOptions = claudeGptModelsEnabled
+    ? {
+      readinessToken: createClaudeGptTlsRouterReadinessToken(),
+      httpPort: claudeGptRouterHttpPort!,
+      diagnosticsPath: CLAUDE_GPT_DIAGNOSTICS_PATH,
+    }
     : null;
-  if (chromeProfilePath) mkdirSync(chromeProfilePath, { recursive: true });
-  const launchEnvironment = shouldEnableClaudeCodexProxy(app.bundleId)
-    ? ensureClaudeCodexProxyEnvironment(cliPath, executablePath)
-    : process.env;
-  const appProcess = spawn(executablePath, [
-    '--remote-debugging-address=127.0.0.1',
-    `--remote-debugging-port=${port}`,
-    '--remote-allow-origins=http://localhost',
-    ...(chromeProfilePath ? [`--user-data-dir=${chromeProfilePath}`, '--no-first-run', '--no-default-browser-check'] : []),
+  const claudeGptRouterEnvironment = claudeGptRouterOptions
+    ? getClaudeGptTlsRouterEnvironment(claudeGptRouterOptions)
+    : null;
+  const claudeWebProxyOptions = claudeGptModelsEnabled
+    ? {
+      readinessToken: createClaudeWebBootstrapProxyReadinessToken(),
+      proxyPort: port,
+      anthropicSocketPath: claudeGptRouterEnvironment!.ANTHROPIC_UNIX_SOCKET,
+      proxyAccessToken: claudeGptRouterOptions!.readinessToken,
+      diagnosticsPath: CLAUDE_GPT_DIAGNOSTICS_PATH,
+    }
+    : null;
+  const watcherToken = randomUUID();
+  const watcherEnvironment: NodeJS.ProcessEnv = {
+    ...process.env,
+    [WATCHER_APP_ID_ENV]: appId,
+    [WATCHER_EXECUTABLE_PATH_ENV]: executablePath,
+    [WATCHER_TOKEN_ENV]: watcherToken,
+    ...(claudeGptRouterOptions
+      ? {
+        [CLAUDE_GPT_MODELS_ENV]: '1',
+        [CLAUDE_GPT_ROUTER_READINESS_TOKEN_ENV]: claudeGptRouterOptions.readinessToken,
+        [CLAUDE_GPT_ROUTER_HTTP_PORT_ENV]: String(claudeGptRouterOptions.httpPort),
+        [CLAUDE_WEB_PROXY_READINESS_TOKEN_ENV]: claudeWebProxyOptions!.readinessToken,
+        [CLAUDE_GPT_DIAGNOSTICS_PATH_ENV]: CLAUDE_GPT_DIAGNOSTICS_PATH,
+      }
+      : {}),
+  };
+  const watcher = spawn(process.execPath, [
+    cliPath,
+    '_watch',
+    configPath,
+    String(port),
+    sessionPath,
+    watcherToken,
   ], {
-    cwd: dirname(executablePath),
     detached: true,
-    env: launchEnvironment,
+    env: watcherEnvironment,
     stdio: 'ignore',
   });
-  appProcess.unref();
+  const watcherStarted = waitForChildSpawn(watcher, 'Attune watcher');
+  void watcherStarted.catch(() => {});
+  let appProcess: ChildProcess | null = null;
+  let watcherPid = watcher.pid ?? 0;
+  try {
+    if (watcherPid <= 0) {
+      await watcherStarted;
+      watcherPid = watcher.pid ?? 0;
+    }
+    if (watcherPid <= 0) throw new Error('Attune watcher started without a process identifier.');
+    writeSession(sessionPath, {
+      appId,
+      appPath: app.path,
+      port,
+      status: 'starting',
+      targetCount: 0,
+      updatedAt: new Date().toISOString(),
+      watcherPid,
+      watcherToken,
+    });
+    await watcherStarted;
+    watcher.unref();
 
-  writeSession(sessionPath, {
-    appId,
-    appPath: app.path,
-    appPid: appProcess.pid,
-    port,
-    status: 'starting',
-    targetCount: 0,
-    updatedAt: new Date().toISOString(),
-    watcherPid: watcher.pid ?? 0,
-  });
+    if (claudeGptRouterOptions) {
+      await Promise.all([
+        waitForClaudeGptTlsRouter(claudeGptRouterOptions),
+        waitForClaudeWebBootstrapProxy(claudeWebProxyOptions!),
+      ]);
+    }
+    requireOwnedLaunchSession(sessionPath, watcherPid);
 
-  return { port };
+    const chromeProfilePath = app.runtime === 'chrome'
+      ? join(ATTUNE_DIR, 'chrome-profiles', appId)
+      : null;
+    if (chromeProfilePath) mkdirSync(chromeProfilePath, { recursive: true });
+    const baseLaunchEnvironment = shouldEnableClaudeCodexProxy(app.bundleId)
+      ? ensureClaudeCodexProxyEnvironment(cliPath, executablePath)
+      : process.env;
+    const routedLaunchEnvironment = claudeGptRouterEnvironment
+      ? withClaudeGptCliRoutingPreload(
+        baseLaunchEnvironment,
+        cliPath,
+        claudeGptRouterEnvironment.ANTHROPIC_BASE_URL!,
+        CLAUDE_GPT_DIAGNOSTICS_PATH,
+      )
+      : baseLaunchEnvironment;
+    const launchEnvironment = claudeGptModelsEnabled
+      ? withoutClaudeUserDataDirectory(routedLaunchEnvironment)
+      : routedLaunchEnvironment;
+    const claudeWebLaunch = claudeWebProxyOptions
+      ? await waitForClaudeWebBootstrapProxy(claudeWebProxyOptions)
+      : null;
+    const launchArguments = claudeWebLaunch
+      ? [
+        `--proxy-pac-url=${claudeWebLaunch.proxyPacUrl}`,
+        `--ignore-certificate-errors-spki-list=${claudeWebLaunch.spkiHash}`,
+      ]
+      : [
+        '--remote-debugging-address=127.0.0.1',
+        `--remote-debugging-port=${port}`,
+        '--remote-allow-origins=http://localhost',
+        ...(chromeProfilePath
+          ? [`--user-data-dir=${chromeProfilePath}`, '--no-first-run', '--no-default-browser-check']
+          : []),
+      ];
+    appProcess = spawn(executablePath, launchArguments, {
+      cwd: dirname(executablePath),
+      detached: true,
+      env: launchEnvironment,
+      stdio: 'ignore',
+    });
+    await waitForChildSpawn(appProcess, app.name);
+    appProcess.unref();
+
+    if (!updateSessionIfOwned(sessionPath, watcherPid, {
+      appPid: appProcess.pid,
+      status: 'starting',
+      targetCount: 0,
+      updatedAt: new Date().toISOString(),
+    })) {
+      throw new Error('Attune launch was cancelled before the app started.');
+    }
+    return { port };
+  } catch (error) {
+    terminateChild(appProcess);
+    terminateChild(watcher);
+    removeSessionIfOwned(sessionPath, watcherPid);
+    throw error;
+  }
+}
+
+function withoutClaudeUserDataDirectory(environment: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  const launchEnvironment = { ...environment };
+  delete launchEnvironment.CLAUDE_USER_DATA_DIR;
+  return launchEnvironment;
+}
+
+function withClaudeGptCliRoutingPreload(
+  environment: NodeJS.ProcessEnv,
+  cliPath: string,
+  baseUrl: string,
+  diagnosticsPath: string,
+): NodeJS.ProcessEnv {
+  const preloadPath = join(dirname(cliPath), 'claude-gpt-cli-preload.js');
+  if (!existsSync(preloadPath)) {
+    throw new Error(`The Claude GPT routing preload is missing at ${preloadPath}.`);
+  }
+  if (!baseUrl) {
+    throw new Error('The Claude GPT loopback base URL is unavailable.');
+  }
+  const preloadOption = `--preload=${pathToFileURL(preloadPath).href}`;
+  const existingBunOptions = environment.BUN_OPTIONS?.trim();
+  return {
+    ...environment,
+    [CLAUDE_GPT_BASE_URL_ENV]: baseUrl,
+    [CLAUDE_GPT_DIAGNOSTICS_PATH_ENV]: diagnosticsPath,
+    BUN_OPTIONS: existingBunOptions
+      ? `${existingBunOptions} ${preloadOption}`
+      : preloadOption,
+  };
 }
 
 export function shouldEnableClaudeCodexProxy(
@@ -241,6 +400,14 @@ export function shouldEnableClaudeCodexProxy(
 ): boolean {
   return bundleId === 'com.openai.codex'
     && environment.ATTUNE_CLAUDE_CODEX_PROXY_ENABLED === '1';
+}
+
+export function shouldEnableClaudeGptModels(
+  bundleId: string | null,
+  environment: NodeJS.ProcessEnv = process.env,
+): boolean {
+  return bundleId === 'com.anthropic.claudefordesktop'
+    && environment[CLAUDE_GPT_MODELS_ENV] === '1';
 }
 
 function ensureClaudeCodexProxyEnvironment(
@@ -332,8 +499,22 @@ export function attach(app: DiscoveredApp, cliPath: string, port: number): void 
   const sessionPath = getSessionPath(appId);
   stopSession(appId);
 
-  const watcher = spawn(process.execPath, [cliPath, '_watch', configPath, String(port), sessionPath], {
+  const watcherToken = randomUUID();
+  const watcher = spawn(process.execPath, [
+    cliPath,
+    '_watch',
+    configPath,
+    String(port),
+    sessionPath,
+    watcherToken,
+  ], {
     detached: true,
+    env: {
+      ...process.env,
+      [WATCHER_APP_ID_ENV]: appId,
+      [WATCHER_EXECUTABLE_PATH_ENV]: getAppExecutablePath(app),
+      [WATCHER_TOKEN_ENV]: watcherToken,
+    },
     stdio: 'ignore',
   });
   watcher.unref();
@@ -346,6 +527,7 @@ export function attach(app: DiscoveredApp, cliPath: string, port: number): void 
     targetCount: 0,
     updatedAt: new Date().toISOString(),
     watcherPid: watcher.pid ?? 0,
+    watcherToken,
   });
 }
 
@@ -354,7 +536,10 @@ export function stopSession(appId: string): boolean {
   const session = readSession(sessionPath);
   if (!session) return false;
 
-  if (session.watcherPid > 0) {
+  if (
+    session.watcherPid > 0
+    && isOwnedWatcherProcess(session.watcherPid, sessionPath, session.watcherToken)
+  ) {
     try {
       process.kill(session.watcherPid, 'SIGTERM');
     } catch {
@@ -665,15 +850,61 @@ function cleanupExpiredInspections(): void {
   }
 }
 
-export async function runWatcher(configPath: string, port: number, sessionPath: string): Promise<void> {
+export async function runWatcher(
+  configPath: string,
+  port: number,
+  sessionPath: string,
+  options: { pollIntervalMs?: number; maxMissedPolls?: number } = {},
+): Promise<void> {
+  const pollIntervalMs = options.pollIntervalMs ?? POLL_INTERVAL_MS;
+  const maxMissedPolls = options.maxMissedPolls ?? MAX_MISSED_POLLS;
+  let claudeGptRouter: ClaudeGptTlsRouterHandle | null = null;
+  let claudeWebProxy: ClaudeWebBootstrapProxyHandle | null = null;
+  if (process.env[CLAUDE_GPT_MODELS_ENV] === '1') {
+    const readinessToken = process.env[CLAUDE_GPT_ROUTER_READINESS_TOKEN_ENV];
+    const routerHttpPortText = process.env[CLAUDE_GPT_ROUTER_HTTP_PORT_ENV];
+    const webReadinessToken = process.env[CLAUDE_WEB_PROXY_READINESS_TOKEN_ENV];
+    const routerHttpPort = Number(routerHttpPortText);
+    const diagnosticsPath = process.env[CLAUDE_GPT_DIAGNOSTICS_PATH_ENV]
+      ?? CLAUDE_GPT_DIAGNOSTICS_PATH;
+    if (
+      !readinessToken
+      || !webReadinessToken
+      || !routerHttpPortText
+      || !Number.isSafeInteger(routerHttpPort)
+      || routerHttpPort < 1
+      || routerHttpPort > 65_535
+    ) {
+      throw new Error('The Claude GPT bridge watcher is missing valid routing state.');
+    }
+    [claudeGptRouter, claudeWebProxy] = await Promise.all([
+      ensureClaudeGptTlsRouter({
+        readinessToken,
+        httpPort: routerHttpPort,
+        diagnosticsPath,
+      }),
+      ensureClaudeWebBootstrapProxy({
+        readinessToken: webReadinessToken,
+        proxyPort: port,
+        anthropicSocketPath: getClaudeGptTlsRouterEnvironment({
+          readinessToken,
+          httpPort: routerHttpPort,
+        }).ANTHROPIC_UNIX_SOCKET,
+        proxyAccessToken: readinessToken,
+        diagnosticsPath,
+      }),
+    ]);
+  }
   let stopped = false;
   let missedPolls = 0;
   let lastPublishedStatus: SessionRecord['status'] | null = null;
   let lastPublishedTargetCount = -1;
   let lastPublishedAt = 0;
   const targetSessions = new Map<string, TargetStylesheetSession>();
-  const hostFingerprintKey = readSession(sessionPath)?.appId ?? null;
-  const stopWorkspaceBridgeServer = startWorkspaceBridgeServer();
+  const watcherAppId = process.env[WATCHER_APP_ID_ENV];
+  const hostFingerprintKey = readSession(sessionPath)?.appId
+    ?? (watcherAppId && watcherAppId.length <= 240 ? watcherAppId : null);
+  const stopWorkspaceBridgeServer = claudeWebProxy ? () => {} : startWorkspaceBridgeServer();
 
   const stop = () => {
     stopped = true;
@@ -694,7 +925,7 @@ export async function runWatcher(configPath: string, port: number, sessionPath: 
     lastPublishedStatus = status;
     lastPublishedTargetCount = targetCount;
     lastPublishedAt = now;
-    updateSession(sessionPath, {
+    updateSessionIfOwned(sessionPath, process.pid, {
       status,
       targetCount,
       updatedAt: new Date(now).toISOString(),
@@ -721,6 +952,31 @@ export async function runWatcher(configPath: string, port: number, sessionPath: 
   };
 
   try {
+    if (claudeGptRouter && claudeWebProxy) {
+      const executablePath = process.env[WATCHER_EXECUTABLE_PATH_ENV];
+      if (!executablePath) {
+        throw new Error('The Claude GPT bridge watcher is missing the Claude executable path.');
+      }
+      const expected = claudeWebProxy.launchConfiguration;
+      while (!stopped) {
+        if (!await claudeGptRouter.health() || !await claudeWebProxy.health()) {
+          removeSessionIfOwned(sessionPath, process.pid);
+          return;
+        }
+        const routingState = getClaudeProcessRoutingState(
+          listProcesses(),
+          executablePath,
+          expected,
+        );
+        if (routingState === 'unrouted') {
+          removeSessionIfOwned(sessionPath, process.pid);
+          return;
+        }
+        publishSession(routingState === 'routed' ? 'attached' : 'waiting', 0);
+        await delay(pollIntervalMs);
+      }
+      return;
+    }
     while (!stopped) {
       try {
         const targets = await getDebugTargets(port);
@@ -750,15 +1006,19 @@ export async function runWatcher(configPath: string, port: number, sessionPath: 
         publishSession('waiting', 0);
       }
 
-      if (missedPolls >= MAX_MISSED_POLLS) {
-        rmSync(sessionPath, { force: true });
+      if (missedPolls >= maxMissedPolls) {
+        removeSessionIfOwned(sessionPath, process.pid);
         return;
       }
 
-      await delay(POLL_INTERVAL_MS);
+      await delay(pollIntervalMs);
     }
   } finally {
     stop();
+    await Promise.allSettled([
+      claudeGptRouter?.cleanup() ?? Promise.resolve(),
+      claudeWebProxy?.cleanup() ?? Promise.resolve(),
+    ]);
   }
 }
 
@@ -1819,6 +2079,106 @@ export function writeHostFingerprints(
   writeAtomically(fingerprintsPath, store);
 }
 
+function waitForChildSpawn(child: ChildProcess, label: string): Promise<void> {
+  return new Promise((resolveSpawn, rejectSpawn) => {
+    const onSpawn = () => {
+      child.off('error', onError);
+      resolveSpawn();
+    };
+    const onError = (error: Error) => {
+      child.off('spawn', onSpawn);
+      rejectSpawn(new Error(`${label} could not start: ${error.message}`));
+    };
+    child.once('spawn', onSpawn);
+    child.once('error', onError);
+  });
+}
+
+function terminateChild(child: ChildProcess | null): void {
+  const pid = child?.pid ?? 0;
+  if (pid <= 0) return;
+  try {
+    process.kill(pid, 'SIGTERM');
+  } catch {
+    // A child that failed or exited during launch needs no further cleanup.
+  }
+}
+
+export function getClaudeProcessRoutingState(
+  processList: string,
+  executablePath: string,
+  launchConfiguration: { proxyPacUrl: string; spkiHash: string },
+): 'absent' | 'routed' | 'unrouted' {
+  const expectedArguments = new Set([
+    `--proxy-pac-url=${launchConfiguration.proxyPacUrl}`,
+    `--ignore-certificate-errors-spki-list=${launchConfiguration.spkiHash}`,
+  ]);
+  let foundMainProcess = false;
+  for (const line of processList.split('\n')) {
+    const match = /^\s*\d+\s+(.+)$/.exec(line);
+    if (!match) continue;
+    const command = match[1];
+    if (command !== executablePath && !command.startsWith(`${executablePath} `)) continue;
+    foundMainProcess = true;
+    const argumentsInCommand = new Set(command.slice(executablePath.length).trim().split(/\s+/).filter(Boolean));
+    if ([...expectedArguments].every(argument => argumentsInCommand.has(argument))) return 'routed';
+  }
+  return foundMainProcess ? 'unrouted' : 'absent';
+}
+
+function listProcesses(): string {
+  try {
+    return execFileSync('/bin/ps', ['-ax', '-o', 'pid=,command='], {
+      encoding: 'utf8',
+      maxBuffer: 8 * 1024 * 1024,
+    });
+  } catch {
+    return '';
+  }
+}
+
+function isOwnedWatcherProcess(
+  pid: number,
+  sessionPath: string,
+  watcherToken: string | undefined,
+): boolean {
+  if (watcherToken !== undefined && !/^[A-Za-z0-9-]{16,128}$/.test(watcherToken)) return false;
+  try {
+    const command = execFileSync('/bin/ps', ['-p', String(pid), '-o', 'command='], {
+      encoding: 'utf8',
+      maxBuffer: 64 * 1024,
+    }).trim();
+    return command.includes(' _watch ')
+      && command.includes(sessionPath)
+      && (watcherToken === undefined || command.split(/\s+/).includes(watcherToken));
+  } catch {
+    return false;
+  }
+}
+
+function requireOwnedLaunchSession(sessionPath: string, watcherPid: number): void {
+  if (readSession(sessionPath)?.watcherPid !== watcherPid) {
+    throw new Error('Attune launch was cancelled before the app started.');
+  }
+}
+
+function removeSessionIfOwned(sessionPath: string, watcherPid: number): void {
+  if (watcherPid > 0 && readSession(sessionPath)?.watcherPid === watcherPid) {
+    rmSync(sessionPath, { force: true });
+  }
+}
+
+function updateSessionIfOwned(
+  sessionPath: string,
+  watcherPid: number,
+  update: Partial<SessionRecord>,
+): boolean {
+  const session = readSession(sessionPath);
+  if (session?.watcherPid !== watcherPid) return false;
+  writeSession(sessionPath, { ...session, ...update });
+  return true;
+}
+
 function readSession(sessionPath: string): SessionRecord | null {
   if (!existsSync(sessionPath)) return null;
   try {
@@ -1831,12 +2191,6 @@ function readSession(sessionPath: string): SessionRecord | null {
 function writeSession(sessionPath: string, session: SessionRecord): void {
   mkdirSync(dirname(sessionPath), { recursive: true });
   writeAtomically(sessionPath, session);
-}
-
-function updateSession(sessionPath: string, update: Partial<SessionRecord>): void {
-  const session = readSession(sessionPath);
-  if (!session) return;
-  writeSession(sessionPath, { ...session, ...update });
 }
 
 function writeAtomically(filePath: string, value: unknown): void {

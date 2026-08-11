@@ -55,7 +55,7 @@ async function main(command: string | undefined, args: string[]) {
       cmdRoles(args[0]);
       break;
     case '_watch':
-      await cmdWatch(args[0], args[1], args[2]);
+      await cmdWatch(args[0], args[1], args[2], args[3]);
       break;
     default:
       printUsage();
@@ -321,9 +321,22 @@ function cmdRoles(query: string | undefined) {
   console.log(JSON.stringify(catalog, null, 2));
 }
 
-async function cmdWatch(configPath: string | undefined, rawPort: string | undefined, sessionPath: string | undefined) {
+async function cmdWatch(
+  configPath: string | undefined,
+  rawPort: string | undefined,
+  sessionPath: string | undefined,
+  watcherToken: string | undefined,
+) {
   const port = Number(rawPort);
-  if (!configPath || !sessionPath || !Number.isInteger(port) || port <= 0 || port > 65535) {
+  const expectedToken = process.env.ATTUNE_WATCHER_TOKEN;
+  if (
+    !configPath
+    || !sessionPath
+    || !Number.isInteger(port)
+    || port <= 0
+    || port > 65535
+    || (expectedToken !== undefined && watcherToken !== expectedToken)
+  ) {
     process.exit(1);
   }
 
