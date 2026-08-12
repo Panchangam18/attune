@@ -1195,7 +1195,8 @@ test('semantic host roles are published as an agent-readable catalog', () => {
   assert.equal(HOST_ROLE_CATALOG['codex.primaryChat'].app, 'Codex');
   assert.equal(HOST_ROLE_CATALOG['claude.modelPicker'].app, 'Claude');
   assert.match(HOST_ROLE_CATALOG['slack.composer'].description, /composer/i);
-  assert.equal(Object.keys(HOST_ROLE_CATALOG).length, 29);
+  assert.match(HOST_ROLE_CATALOG['slack.primaryView'].description, /channel|conversation/i);
+  assert.equal(Object.keys(HOST_ROLE_CATALOG).length, 36);
 });
 
 test('host fingerprints round-trip in isolated per-app stores and reject corrupt data', async t => {

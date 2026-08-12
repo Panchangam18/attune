@@ -8,9 +8,15 @@ export interface AgentStyleSource {
 }
 
 const HOST_ROLE_SELECTOR_RE = /\[data-attune-host-roles\s*~=\s*(?:"([^"]+)"|'([^']+)'|([^\]\s]+))\s*\]/g;
+const ATTUNE_BINDINGS_BLOCK_RE = /\/\*\s*@attune-bindings[\s\S]*?@end-attune-bindings\s*\*\//g;
+const ATTUNE_SCRIPT_BLOCK_RE = /\/\*\s*@attune-script[\s\S]*?@end-attune-script\s*\*\//g;
 
 export function buildAgentStyleSource(appId: string, appName: string, css: string): AgentStyleSource {
-  const normalizedCss = css.trim();
+  const normalizedSource = css.trim();
+  const normalizedCss = normalizedSource
+    .replace(ATTUNE_BINDINGS_BLOCK_RE, '')
+    .replace(ATTUNE_SCRIPT_BLOCK_RE, '')
+    .trim();
   const roles = extractSemanticRoles(normalizedCss);
   const unknownRoles = roles.filter(role => !HOST_ROLE_CATALOG[role]);
   if (unknownRoles.length) {
@@ -19,7 +25,7 @@ export function buildAgentStyleSource(appId: string, appName: string, css: strin
 
   const attunementId = `agent-style:${appId}`;
   if (!normalizedCss || roles.length === 0) {
-    return { source: normalizedCss, css: normalizedCss, roles, attunementId };
+    return { source: normalizedSource, css: normalizedCss, roles, attunementId };
   }
 
   const bindings = roles.map(role => ({ name: role, role, required: true }));
@@ -30,7 +36,7 @@ export function buildAgentStyleSource(appId: string, appName: string, css: strin
     bindings,
   });
   return {
-    source: `/* @attune-bindings\n${metadata}\n@end-attune-bindings */\n\n${normalizedCss}`,
+    source: `/* @attune-bindings\n${metadata}\n@end-attune-bindings */\n\n${normalizedSource}`,
     css: normalizedCss,
     roles,
     attunementId,

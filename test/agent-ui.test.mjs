@@ -26,6 +26,24 @@ test('agent CSS persists exactly the semantic roles it references', () => {
   assert.equal(parsed.bindingSets[0].schemaVersion, 2);
 });
 
+test('agent CSS verifies compiled sources after removing runtime metadata blocks', () => {
+  const source = `/* @attune-bindings
+{"schemaVersion":1,"attunementId":"theme","appName":"Slack","bindings":[]}
+@end-attune-bindings */
+
+[data-attune-host-roles~="slack.workspace"] { color: white; }
+
+/* @attune-script
+window.__themeReady = true;
+@end-attune-script */`;
+  const style = buildAgentStyleSource('com.tinyspeck.slackmacgap', 'Slack', source);
+
+  assert.match(style.source, /attunementId":"theme/);
+  assert.match(style.source, /@attune-script/);
+  assert.equal(style.css, '[data-attune-host-roles~="slack.workspace"] { color: white; }');
+  assert.deepEqual(style.roles, ['slack.workspace']);
+});
+
 test('agent CSS rejects invented semantic roles', () => {
   assert.throws(() => buildAgentStyleSource(
     'com.example',

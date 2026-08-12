@@ -20,6 +20,7 @@ export const HOST_ROLE_CATALOG: Record<string, HostRoleCatalogEntry> = {
   'codex.sidebar': { app: 'Codex', description: 'The application sidebar.' },
   'codex.sidebarThreads': { app: 'Codex', description: 'The thread list inside the sidebar.' },
   'codex.modelPicker': { app: 'Codex', description: 'The model picker in the composer.' },
+  'codex.submitButton': { app: 'Codex', description: 'The primary Send or Stop action in the composer.' },
   'chatgpt.conversation': { app: 'ChatGPT', description: 'The active conversation surface.' },
   'chatgpt.composer': { app: 'ChatGPT', description: 'The prompt composer.' },
   'chatgpt.attachmentMenu': { app: 'ChatGPT', description: 'The attachment or upload menu.' },
@@ -33,14 +34,20 @@ export const HOST_ROLE_CATALOG: Record<string, HostRoleCatalogEntry> = {
   'linear.issueDetail': { app: 'Linear', description: 'The active issue detail surface.' },
   'linear.statusControl': { app: 'Linear', description: 'The issue status control.' },
   'slack.workspace': { app: 'Slack', description: 'The Slack workspace shell.' },
+  'slack.topNav': { app: 'Slack', description: 'The global Slack navigation bar.' },
+  'slack.tabRail': { app: 'Slack', description: 'The outer workspace tab rail.' },
+  'slack.sidebar': { app: 'Slack', description: 'The channel and direct-message sidebar.' },
+  'slack.primaryView': { app: 'Slack', description: 'The active channel or conversation surface.' },
+  'slack.viewHeader': { app: 'Slack', description: 'The header for the active Slack view.' },
   'slack.composer': { app: 'Slack', description: 'The message composer.' },
+  'slack.composerShell': { app: 'Slack', description: 'The complete message composer chrome.' },
   'slack.sendButton': { app: 'Slack', description: 'The message send control.' },
   'cursor.workbench': { app: 'Cursor', description: 'The editor workbench.' },
   'cursor.titlebar': { app: 'Cursor', description: 'The editor title bar.' },
   'youtube.player': { app: 'YouTube', description: 'The primary video player.' },
 };
 
-export const HOST_MAPPER_VERSION = 5;
+export const HOST_MAPPER_VERSION = 9;
 
 /**
  * This function is serialized into the target renderer. Keep it self-contained:
@@ -266,6 +273,29 @@ function installHostMapper(bindingSets: unknown[], savedFingerprints: Record<str
     'codex.sidebar': { description: 'The application sidebar.', candidates: 'aside, nav, [role="navigation"]', resolve: () => ([...document.querySelectorAll('aside.app-shell-left-panel, aside')] as ElementLike[]).find(element => element.querySelector?.('[data-app-action-sidebar-scroll]') || visible(element)) || null },
     'codex.sidebarThreads': { description: 'The sidebar thread list.', candidates: '[data-app-action-sidebar-scroll], aside nav, aside', resolve: c => c.resolve('codex.sidebar')?.querySelector?.('[data-app-action-sidebar-scroll], nav') as ElementLike || c.resolve('codex.sidebar') },
     'codex.modelPicker': { description: 'The model picker.', candidates: '[data-codex-intelligence-trigger], button[aria-haspopup="menu"], [role="combobox"]', resolve: c => { const composer = c.resolve('codex.composer'); return c.first('[data-codex-intelligence-trigger]', composer || document) || c.first('button[aria-haspopup="menu"]', composer || document); } },
+    'codex.submitButton': {
+      description: 'The primary Send or Stop action in the composer.',
+      candidates: 'button',
+      resolve: c => {
+        const composer = c.resolve('codex.composer') || document;
+        const explicit = c.first('button[type="submit"], button[data-testid="send-button"], button[data-testid="stop-button"], button[aria-label*="send" i], button[aria-label*="stop" i], button[aria-label*="interrupt" i], button[aria-label*="submit" i]', composer);
+        if (explicit) return explicit;
+        return ([...composer.querySelectorAll('button')] as ElementLike[])
+          .filter(visible)
+          .map(element => ({ element, bounds: element.getBoundingClientRect() }))
+          .filter(({ element, bounds }) => (
+            bounds.width >= 24
+            && bounds.width <= 56
+            && bounds.height >= 24
+            && bounds.height <= 56
+            && !element.hasAttribute('aria-haspopup')
+          ))
+          .sort((left, right) => (
+            right.bounds.right - left.bounds.right
+            || right.bounds.bottom - left.bounds.bottom
+          ))[0]?.element || null;
+      },
+    },
   };
   const chatgptRoles: Record<string, RoleDefinition> = {
     'chatgpt.conversation': { description: 'The active conversation surface.', candidates: 'main, [role="main"], section', resolve: () => ([...document.querySelectorAll('main, [role="main"]')] as ElementLike[]).map(element => ({ element, score: chatGptConversationScore(element) })).filter(candidate => candidate.score >= 3).sort((left, right) => right.score - left.score)[0]?.element || null },
@@ -328,7 +358,43 @@ function installHostMapper(bindingSets: unknown[], savedFingerprints: Record<str
   };
   const slackRoles: Record<string, RoleDefinition> = {
     'slack.workspace': { description: 'The Slack workspace shell.', candidates: '[data-qa="client_container"], .p-client, #client-ui, body', resolve: () => document.querySelector('[data-qa="client_container"], .p-client, #client-ui') as ElementLike || document.body as ElementLike },
+    'slack.topNav': { description: 'The global Slack navigation bar.', candidates: '[data-qa="top-nav"], .p-ia4_top_nav', resolve: c => c.first('[data-qa="top-nav"], .p-ia4_top_nav') },
+    'slack.tabRail': { description: 'The outer workspace tab rail.', candidates: '[data-qa="tab_rail_desktop"], .p-tab_rail', resolve: c => c.first('[data-qa="tab_rail_desktop"], .p-tab_rail') },
+    'slack.sidebar': {
+      description: 'The channel and direct-message sidebar.',
+      candidates: '[data-qa="channel-sidebar"], [aria-label="Channels and direct messages"], .p-view_contents--sidebar',
+      resolve: c => {
+        const channels = c.first('[data-qa="channel-sidebar"], [aria-label="Channels and direct messages"]');
+        return channels?.closest?.('.p-view_contents--sidebar, .p-view_contents, [role="group"]') as ElementLike
+          || c.first('.p-view_contents--sidebar');
+      },
+    },
+    'slack.primaryView': {
+      description: 'The active channel or conversation surface.',
+      candidates: '[data-qa="view_header"], [aria-label^="Channel "], .p-view_contents:not(.p-view_contents--sidebar)',
+      resolve: c => {
+        const header = c.resolve('slack.viewHeader');
+        return header?.closest?.('[aria-label^="Channel "], .p-view_contents, [role="group"]') as ElementLike
+          || c.first('[aria-label^="Channel "], .p-view_contents:not(.p-view_contents--sidebar)');
+      },
+    },
+    'slack.viewHeader': { description: 'The header for the active Slack view.', candidates: '[data-qa="view_header"], .p-view_header', resolve: c => c.first('[data-qa="view_header"], .p-view_header') },
     'slack.composer': { description: 'The message composer.', candidates: '[data-qa="texty_input"], [contenteditable="true"][role="textbox"]', resolve: c => c.first('[data-qa="texty_input"], [contenteditable="true"][role="textbox"]') },
+    'slack.composerShell': {
+      description: 'The complete message composer chrome.',
+      candidates: '[data-qa="message_input"], .p-message_input, .p-composer, form',
+      resolve: c => {
+        const editor = c.resolve('slack.composer');
+        const sendButton = c.resolve('slack.sendButton');
+        let commonAncestor = editor as ElementLike | null;
+        while (commonAncestor && sendButton && !commonAncestor.contains?.(sendButton)) {
+          commonAncestor = commonAncestor.parentElement as ElementLike | null;
+        }
+        return commonAncestor
+          || editor?.closest?.('[data-qa="message_input"], .p-message_input, .p-composer, form') as ElementLike
+          || c.first('[data-qa="message_input"], .p-message_input, .p-composer');
+      },
+    },
     'slack.sendButton': { description: 'The message send control.', candidates: '[data-qa="texty_send_button"], button[aria-label*="send" i]', resolve: c => { const composer = c.resolve('slack.composer'); return composer?.closest?.('form, [data-qa*="message_input" i]')?.querySelector?.('[data-qa="texty_send_button"], button[aria-label*="send" i]') as ElementLike || c.first('[data-qa="texty_send_button"], button[aria-label*="send" i]'); } },
   };
   const cursorRoles: Record<string, RoleDefinition> = {
