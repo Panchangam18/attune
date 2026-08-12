@@ -11,6 +11,7 @@ import {
   createClaudeGptTlsRouterReadinessToken,
   ensureClaudeGptTlsRouter,
   getClaudeGptTlsRouterEnvironment,
+  verifyClaudeGptBackend,
   waitForClaudeGptTlsRouter,
   type ClaudeGptTlsRouterHandle,
 } from './claude-gpt-tls-router.js';
@@ -244,6 +245,11 @@ export async function launch(app: DiscoveredApp, cliPath: string): Promise<{ por
       diagnosticsPath: CLAUDE_GPT_DIAGNOSTICS_PATH,
     }
     : null;
+  if (claudeGptRouterOptions) {
+    await verifyClaudeGptBackend({
+      diagnosticsPath: CLAUDE_GPT_DIAGNOSTICS_PATH,
+    });
+  }
   const watcherToken = randomUUID();
   const watcherEnvironment: NodeJS.ProcessEnv = {
     ...process.env,

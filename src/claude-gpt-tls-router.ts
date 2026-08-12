@@ -42,6 +42,10 @@ import {
   routingErrorCode,
   type RoutingDiagnostics,
 } from './claude-gpt-diagnostics.js';
+import {
+  createClaudeCodexAppServer,
+  type ClaudeCodexAppServerHandle,
+} from './claude-codex-app-server.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -133,6 +137,13 @@ export interface ClaudeGptTlsRouterHandle {
   cleanup(): Promise<void>;
 }
 
+export interface ClaudeGptBackendStatus {
+  backend: 'codexAppServer' | 'legacyGateway';
+  accountType: string | null;
+  planType: string | null;
+  availableModels: readonly string[];
+}
+
 export interface ClaudeGptTlsRouterOptions {
   /** Defaults to ~/.attune/claude-gpt-router. Primarily overridable for tests. */
   stateDirectory?: string;
@@ -143,12 +154,17 @@ export interface ClaudeGptTlsRouterOptions {
    * that expose ANTHROPIC_UNIX_SOCKET but no longer use it for API requests.
    */
   httpPort?: number;
-  /** Defaults to ~/.cli-proxy-api/client.key. */
+  /** Legacy gateway credential; supplying it opts into legacy gateway mode. */
   credentialPath?: string;
   /** Defaults to https://api.anthropic.com. */
   nativeUpstream?: string | URL;
-  /** Defaults to http://127.0.0.1:8317 and must stay on a loopback host. */
+  /**
+   * Explicit legacy gateway origin. When omitted, Attune uses the official
+   * local Codex app-server and its existing managed login.
+   */
   gptUpstream?: string | URL;
+  /** Optional explicit Codex binary. Defaults to the ChatGPT bundle, then PATH. */
+  codexPath?: string;
   /** Defaults to the three model aliases exported above. */
   gptModelAliases?: readonly string[];
   /** Defaults to /usr/bin/openssl. */
@@ -189,6 +205,8 @@ interface NormalizedRouterOptions {
   credentialPath: string;
   nativeUpstream: URL;
   gptUpstream: URL;
+  useLegacyGptGateway: boolean;
+  codexPath: string | undefined;
   gptModelAliases: ReadonlySet<string>;
   opensslPath: string;
   maxRequestBodyBytes: number;
@@ -292,6 +310,47 @@ export function ensureClaudeGptTlsRouter(
   return startPromise;
 }
 
+/**
+ * Fail a user-initiated launch early with an actionable Codex auth/model error
+ * instead of letting the detached watcher time out with only "not ready".
+ */
+export async function verifyClaudeGptBackend(
+  options: ClaudeGptTlsRouterOptions = {},
+): Promise<ClaudeGptBackendStatus> {
+  const normalized = normalizeOptions(options);
+  if (normalized.useLegacyGptGateway) {
+    return {
+      backend: 'legacyGateway',
+      accountType: null,
+      planType: null,
+      availableModels: Object.freeze([]),
+    };
+  }
+  const client = await createClaudeCodexAppServer({
+    codexPath: normalized.codexPath,
+    diagnostics: normalized.diagnostics,
+    requiredModels: requiredCodexModels(normalized.gptModelAliases),
+  });
+  try {
+    const status = client.status();
+    return {
+      backend: 'codexAppServer',
+      accountType: status.accountType,
+      planType: status.planType,
+      availableModels: status.availableModels,
+    };
+  } finally {
+    await client.cleanup();
+    await normalized.diagnostics.flush();
+  }
+}
+
+function requiredCodexModels(aliases: ReadonlySet<string>): string[] {
+  return [...aliases]
+    .map(alias => CLAUDE_GPT_MODEL_IDENTITIES.get(alias)?.upstreamModel ?? null)
+    .filter((model): model is string => model !== null);
+}
+
 function normalizeOptions(options: ClaudeGptTlsRouterOptions): NormalizedRouterOptions {
   const stateDirectory = resolve(
     options.stateDirectory ?? join(homedir(), '.attune', 'claude-gpt-router'),
@@ -305,11 +364,15 @@ function normalizeOptions(options: ClaudeGptTlsRouterOptions): NormalizedRouterO
   }
 
   const nativeUpstream = new URL(options.nativeUpstream ?? DEFAULT_NATIVE_UPSTREAM);
+  const useLegacyGptGateway = options.gptUpstream !== undefined
+    || options.credentialPath !== undefined;
   const gptUpstream = new URL(options.gptUpstream ?? DEFAULT_GPT_UPSTREAM);
   validateUpstream(nativeUpstream, 'native', options.allowInsecureNativeUpstream === true);
-  validateUpstream(gptUpstream, 'gpt', false);
-  if (!isLoopbackHostname(gptUpstream.hostname)) {
-    throw new Error('The GPT gateway must use a loopback hostname.');
+  if (useLegacyGptGateway) {
+    validateUpstream(gptUpstream, 'gpt', false);
+    if (!isLoopbackHostname(gptUpstream.hostname)) {
+      throw new Error('The GPT gateway must use a loopback hostname.');
+    }
   }
 
   const aliases = options.gptModelAliases ?? CLAUDE_GPT_MODEL_ALIASES;
@@ -355,6 +418,8 @@ function normalizeOptions(options: ClaudeGptTlsRouterOptions): NormalizedRouterO
     ),
     nativeUpstream,
     gptUpstream,
+    useLegacyGptGateway,
+    codexPath: options.codexPath,
     gptModelAliases: new Set(aliases),
     opensslPath: options.opensslPath ?? '/usr/bin/openssl',
     maxRequestBodyBytes,
@@ -404,12 +469,20 @@ async function startRouter(
   await ensurePrivateDirectory(options.stateDirectory);
   const material = await ensureCertificateMaterial(options);
   await waitForSocketTakeover(options.socketPath, options.socketTakeoverTimeoutMs);
+  let codexAppServer: ClaudeCodexAppServerHandle | null = null;
+  if (!options.useLegacyGptGateway) {
+    codexAppServer = await createClaudeCodexAppServer({
+      codexPath: options.codexPath,
+      diagnostics: options.diagnostics,
+      requiredModels: requiredCodexModels(options.gptModelAliases),
+    });
+  }
 
   const server = createHttpsServer({
     key: material.leafKey,
     cert: material.leafCertificate,
   }, (request, response) => {
-    void handleRequest(request, response, options, {
+    void handleRequest(request, response, options, codexAppServer, {
       expectedHost: CERTIFICATE_HOSTNAME,
       pathPrefix: '',
       requireLoopback: false,
@@ -420,7 +493,12 @@ async function startRouter(
     // TLS failures are intentionally silent: they can contain request metadata.
   });
 
-  await listenOnSocket(server, options.socketPath);
+  try {
+    await listenOnSocket(server, options.socketPath);
+  } catch (error) {
+    await codexAppServer?.cleanup().catch(() => {});
+    throw error;
+  }
   server.on('error', () => {
     // Runtime socket errors are reflected by server.listening/status. They must
     // not crash the watcher or print request-adjacent metadata.
@@ -431,7 +509,7 @@ async function startRouter(
   if (options.httpPort !== null) {
     const pathPrefix = routerHttpPathPrefix(options.readinessToken);
     httpServer = createHttpServer((request, response) => {
-      void handleRequest(request, response, options, {
+      void handleRequest(request, response, options, codexAppServer, {
         expectedHost: `127.0.0.1:${options.httpPort}`,
         pathPrefix,
         requireLoopback: true,
@@ -447,6 +525,7 @@ async function startRouter(
     } catch (error) {
       await stopRouter(server, null, options.socketPath, socketIdentity.dev, socketIdentity.ino)
         .catch(() => {});
+      await codexAppServer?.cleanup().catch(() => {});
       throw error;
     }
   }
@@ -455,6 +534,7 @@ async function startRouter(
   options.diagnostics.write('router', 'started', {
     httpEnabled: options.httpPort !== null,
     aliasCount: options.gptModelAliases.size,
+    gptBackend: options.useLegacyGptGateway ? 'legacyGateway' : 'codexAppServer',
   });
 
   let running = true;
@@ -479,7 +559,8 @@ async function startRouter(
     status: () => ({
       running: running
         && server.listening
-        && (httpServer === null || httpServer.listening),
+        && (httpServer === null || httpServer.listening)
+        && (codexAppServer === null || codexAppServer.health()),
       socketPath: options.socketPath,
       httpPort: options.httpPort,
       caCertificatePath: material.paths.caCertificate,
@@ -488,6 +569,7 @@ async function startRouter(
     health: async () => running
       && server.listening
       && (httpServer === null || httpServer.listening)
+      && (codexAppServer === null || codexAppServer.health())
       && await probeRouterReadiness(
         options.socketPath,
         material.caCertificate,
@@ -496,13 +578,16 @@ async function startRouter(
       )
       && (options.httpPort === null || await probeHttpRouterReadiness(options, 500)),
     cleanup: () => {
-      cleanupPromise ??= stopRouter(
-        server,
-        httpServer,
-        options.socketPath,
-        socketIdentity.dev,
-        socketIdentity.ino,
-      ).finally(() => options.diagnostics.flush());
+      cleanupPromise ??= Promise.all([
+        stopRouter(
+          server,
+          httpServer,
+          options.socketPath,
+          socketIdentity.dev,
+          socketIdentity.ino,
+        ),
+        codexAppServer?.cleanup() ?? Promise.resolve(),
+      ]).then(() => {}).finally(() => options.diagnostics.flush());
       return cleanupPromise;
     },
   };
@@ -808,6 +893,7 @@ async function handleRequest(
   request: IncomingMessage,
   response: ServerResponse,
   options: NormalizedRouterOptions,
+  codexAppServer: ClaudeCodexAppServerHandle | null,
   context: RouterRequestContext,
 ): Promise<void> {
   const requestId = createRoutingDiagnosticId();
@@ -886,7 +972,9 @@ async function handleRequest(
     options.diagnostics.write('router', 'messageRouteClassified', {
       requestId,
       transport: context.transport,
-      route: isGptRequest ? 'gptGateway' : 'nativeUpstream',
+      route: isGptRequest
+        ? (codexAppServer ? 'codexAppServer' : 'gptGateway')
+        : 'nativeUpstream',
       requestBytes: bounded.body.length,
     });
 
@@ -899,7 +987,7 @@ async function handleRequest(
       const routedBody = identityRewrite?.body ?? bounded.body;
       options.diagnostics.write('router', 'gptRequestAccepted', {
         requestId,
-        route: 'gptGateway',
+        route: codexAppServer ? 'codexAppServer' : 'gptGateway',
         modelAlias: model,
         upstreamModel: identity?.upstreamModel ?? null,
         modelDisplayName: identity?.displayName ?? null,
@@ -917,6 +1005,32 @@ async function handleRequest(
           requestBytesBefore: bounded.body.length,
           requestBytesAfter: routedBody.length,
         });
+      }
+      if (codexAppServer && !identity) {
+        sendError(response, 503, 'The selected GPT model is not mapped to a local Codex model.');
+        return;
+      }
+      if (codexAppServer && identity) {
+        const abort = new AbortController();
+        request.once('aborted', () => abort.abort());
+        response.once('close', () => {
+          if (!response.writableEnded) abort.abort();
+        });
+        await codexAppServer.respond(
+          response,
+          url.pathname,
+          routedBody,
+          identity,
+          {
+            requestId,
+            modelAlias: model,
+            upstreamModel: identity.upstreamModel,
+            modelDisplayName: identity.displayName,
+            startedAt,
+          },
+          abort.signal,
+        );
+        return;
       }
       let credential: string;
       try {

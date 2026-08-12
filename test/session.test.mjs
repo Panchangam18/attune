@@ -32,6 +32,9 @@ import {
 const execFileAsync = promisify(execFile);
 const sessionModuleUrl = new URL('../dist/session.js', import.meta.url).href;
 const cliPath = fileURLToPath(new URL('../dist/cli.js', import.meta.url));
+const mockCodexBridge = fileURLToPath(
+  new URL('./fixtures/mock-claude-codex-bridge.mjs', import.meta.url),
+);
 
 test('Claude Codex proxy is gated by both the ChatGPT bundle and Attune launch flag', () => {
   assert.equal(shouldEnableClaudeCodexProxy('com.openai.codex', {
@@ -148,6 +151,7 @@ test('launch publishes a provisional owner and honors cancellation before app sp
     },
     extraEnvironment: {
       ATTUNE_CLAUDE_GPT_MODELS_ENABLED: '1',
+      ATTUNE_CODEX_APP_SERVER_PATH: mockCodexBridge,
       ATTUNE_FAKE_APP_MARKER: markerPath,
     },
   });
@@ -241,6 +245,7 @@ test('GPT-enabled Claude launch keeps API routing inside the CLI preload', async
     },
     extraEnvironment: {
       ATTUNE_CLAUDE_GPT_MODELS_ENABLED: '1',
+      ATTUNE_CODEX_APP_SERVER_PATH: mockCodexBridge,
       ATTUNE_FAKE_APP_MARKER: markerPath,
       ATTUNE_FAKE_ARGS_MARKER: argumentsPath,
       ATTUNE_FAKE_BASE_URL_MARKER: baseUrlPath,

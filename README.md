@@ -61,6 +61,39 @@ landmarks, selector stability, bounds, and computed-style samples. Because
 visible labels and text may appear in the JSON and screenshots, inspection
 output should be treated as private user data.
 
+## Claude GPT Bridge Authentication
+
+The `claude-gpt-models` attunement keeps Claude Desktop as the UI, history
+owner, and tool harness. Native Claude model requests continue to Anthropic.
+Only Attune's exact GPT aliases are routed through the local bridge:
+
+```text
+Claude Desktop
+  -> Attune's authenticated local router
+  -> codex app-server (stdio)
+  -> the account already managed by the installed Codex runtime
+```
+
+Attune does not read, copy, or refresh `~/.codex/auth.json`. It launches the
+official `codex app-server`, checks `account/read` and `model/list`, and lets
+Codex own token storage and refresh. The Codex UI does not need to be open. GPT
+turns are ephemeral so they do not create duplicate Codex history, while any
+model-selected tools are returned to Claude Code for execution by its existing
+harness.
+
+The original prototype used a separate CLIProxyAPI process on loopback port
+8317. Attune authenticated that local hop with
+`~/.cli-proxy-api/client.key`; the key was not an OpenAI credential. The gateway
+then maintained its own Codex OAuth state and translated Anthropic-shaped
+requests. That extra process and second auth lifecycle are now legacy-only and
+are selected only when a caller explicitly supplies `gptUpstream` or
+`credentialPath` to the router.
+
+The local certificate remains part of the bridge, but it is routing trust—not
+OpenAI authentication. It lets the launched Claude process securely reach
+Attune's private local router without modifying Claude's signed application
+bundle.
+
 ## Semantic Host Roles
 
 Manifest-v2 attunements should bind to semantic host roles and style the stable
@@ -93,10 +126,9 @@ compose its tokens, base layout, and adapters at runtime.
 Arrakis uses Nasalization Regular for readable UI text. The catalog package
 includes the font asset so Attune can compile a self-contained stylesheet.
 
-Spotify, Slack, VS Code, and ChatGPT are intended for Attune-compatible desktop
-renderers. The Claude adapter is a reusable CSS surface for a browser extension
-or another compatible renderer; Attune does not currently launch Claude
-directly.
+Spotify, Slack, VS Code, ChatGPT, and supported Claude Desktop builds are
+intended for Attune-compatible desktop renderers. Claude's GPT model bridge is
+enabled only by its dedicated attunement and Attune-managed launch.
 
 ## Scope And Safety
 

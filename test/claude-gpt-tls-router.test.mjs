@@ -24,6 +24,8 @@ import {
 } from '../dist/claude-gpt-tls-router.js';
 
 const TLS_HOSTNAME = 'api.anthropic.com';
+const mockCodexBridge = new URL('./fixtures/mock-claude-codex-bridge.mjs', import.meta.url).pathname;
+const mockCodexAuthMissing = new URL('./fixtures/mock-claude-codex-auth-missing.mjs', import.meta.url).pathname;
 
 function assertIdentityPrompt(text, displayName, upstreamModel) {
   assert.match(text, /<attune_model_identity version="1">/);
@@ -126,6 +128,28 @@ async function createFixture(t, {
   return { root, stateDirectory, credentialPath, native, gpt, options, handle };
 }
 
+async function createCodexFixture(t, { codexPath = mockCodexBridge } = {}) {
+  const root = await mkdtemp('/tmp/attune-claude-codex-router-test-');
+  const stateDirectory = join(root, 'state');
+  const native = await startMockUpstream('native');
+  const diagnosticsPath = join(root, 'logs', 'routing.jsonl');
+  const options = {
+    stateDirectory,
+    nativeUpstream: native.url,
+    allowInsecureNativeUpstream: true,
+    codexPath,
+    diagnosticsPath,
+  };
+  let handle = null;
+  t.after(async () => {
+    await handle?.cleanup();
+    await native.close();
+    await rm(root, { recursive: true, force: true });
+  });
+  handle = await ensureClaudeGptTlsRouter(options);
+  return { root, stateDirectory, native, diagnosticsPath, options, handle };
+}
+
 async function requestHttpRouter(handle, {
   body = '',
   headers = {},
@@ -177,6 +201,92 @@ async function requestRouter(handle, { body = '', headers = {}, method = 'POST',
     request.end(body);
   });
 }
+
+test('uses the official local Codex app-server session by default', async t => {
+  const fixture = await createCodexFixture(t);
+  const response = await requestRouter(fixture.handle, {
+    body: JSON.stringify({
+      model: CLAUDE_GPT_MODEL_ALIASES[2],
+      stream: true,
+      max_tokens: 256,
+      system: 'Keep the host system prompt intact.',
+      messages: [{ role: 'user', content: 'Confirm the local bridge.' }],
+    }),
+    headers: { 'content-type': 'application/json' },
+  });
+
+  assert.equal(response.statusCode, 200);
+  assert.equal(response.headers['content-type'], 'text/event-stream; charset=utf-8');
+  const stream = response.body.toString('utf8');
+  assert.match(stream, /event: message_start/);
+  assert.match(stream, /"type":"text_delta","text":"GPT_BRIDGE_OK"/);
+  assert.match(stream, /"stop_reason":"end_turn"/);
+  assert.match(stream, /event: message_stop/);
+  assert.equal(fixture.native.requests.length, 0);
+
+  await fixture.handle.cleanup();
+  const diagnostics = (await readFile(fixture.diagnosticsPath, 'utf8'))
+    .trim().split('\n').map(line => JSON.parse(line));
+  assert.ok(diagnostics.some(record => record.event === 'codexAppServerReady'));
+  assert.ok(diagnostics.some(record => record.event === 'codexTurnStarted'));
+  assert.ok(diagnostics.some(record => record.event === 'codexResponseCompleted'));
+  assert.equal(
+    diagnostics.find(record => record.event === 'started')?.gptBackend,
+    'codexAppServer',
+  );
+});
+
+test('returns Codex dynamic tool calls to the Claude host harness', async t => {
+  const fixture = await createCodexFixture(t);
+  const response = await requestRouter(fixture.handle, {
+    body: JSON.stringify({
+      model: CLAUDE_GPT_MODEL_ALIASES[1],
+      stream: true,
+      messages: [{ role: 'user', content: 'please use tool' }],
+      tools: [{
+        name: 'Read',
+        description: 'Read a file through the Claude host.',
+        input_schema: {
+          type: 'object',
+          properties: { path: { type: 'string' } },
+          required: ['path'],
+          additionalProperties: false,
+        },
+      }],
+    }),
+    headers: { 'content-type': 'application/json' },
+  });
+
+  assert.equal(response.statusCode, 200);
+  const stream = response.body.toString('utf8');
+  assert.match(stream, /"type":"tool_use"/);
+  assert.match(stream, /"name":"Read"/);
+  assert.match(stream, /"partial_json":"\{\\"path\\":\\"README\.md\\"\}"/);
+  assert.match(stream, /"stop_reason":"tool_use"/);
+});
+
+test('estimates count_tokens locally without starting a Codex turn', async t => {
+  const fixture = await createCodexFixture(t);
+  const response = await requestRouter(fixture.handle, {
+    path: '/v1/messages/count_tokens',
+    body: JSON.stringify({
+      model: CLAUDE_GPT_MODEL_ALIASES[0],
+      messages: [{ role: 'user', content: 'Count this request.' }],
+    }),
+    headers: { 'content-type': 'application/json' },
+  });
+  assert.equal(response.statusCode, 200);
+  const result = JSON.parse(response.body.toString('utf8'));
+  assert.ok(Number.isInteger(result.input_tokens));
+  assert.ok(result.input_tokens > 0);
+});
+
+test('fails readiness with an actionable error when local Codex is signed out', async t => {
+  await assert.rejects(
+    createCodexFixture(t, { codexPath: mockCodexAuthMissing }),
+    /No local Codex login is available/,
+  );
+});
 
 test('correlates a GPT stream without logging request or response content', async t => {
   const fixture = await createFixture(t, { withDiagnostics: true });
