@@ -12,6 +12,7 @@ Use Attune's semantic element map instead of reverse-engineering generated DOM c
 Use the fewest calls that preserve correctness when the app is already Open in Attune:
 
 - If the user supplies an exact semantic selector or role, call `style --css` directly. It validates the attached session, applies the CSS, and verifies the role mapping in one call.
+- If the user pastes an `Attune element reference`, treat it as the authoritative target. Use its semantic role directly when present. If it says `unmapped`, use the bounded element and receipt evidence to add a stable, purpose-named role/resolver and coverage before styling.
 - Otherwise, make the change in exactly two calls:
 
 1. Get the bounded semantic editing surface:
@@ -44,6 +45,7 @@ Do not prepend `scan`, `status`, `roles`, or `inspect` to either fast path. Do n
 ## Styling rules
 
 - Prefer selectors returned by `elements`; do not guess role names.
+- When a reusable attunement target has no semantic host role, add a stable role/resolver for it before styling. Name the role after the element's purpose rather than its current DOM structure, update the role catalog or resolver, and add coverage when appropriate so the mapping survives renderer updates. Do not create roles for one-off decorative elements.
 - Preserve readable contrast, keyboard focus, scrolling, and essential controls.
 - Scope changes narrowly. Use `!important` only for host theme tokens or specificity that requires it.
 - Do not hide or disable functionality unless the user explicitly requests it.

@@ -215,7 +215,10 @@ export async function launch(app: DiscoveredApp, cliPath: string): Promise<{ por
   if (!existsSync(executablePath)) {
     throw new Error(`Could not find the app executable at ${executablePath}`);
   }
-  if (isProcessRunning(executablePath)) {
+  // Chrome is launched with Attune's own --user-data-dir, so it can safely run
+  // beside the user's normal Chrome process. Electron/CEF apps generally reuse
+  // their existing single-instance process and would drop the debug flags.
+  if (app.runtime !== 'chrome' && isProcessRunning(executablePath)) {
     throw new Error(`"${app.name}" is already running. Quit it, then run Attune launch again.`);
   }
 
@@ -528,6 +531,7 @@ export function attach(app: DiscoveredApp, cliPath: string, port: number): void 
   writeSession(sessionPath, {
     appId,
     appPath: app.path,
+    appPid: findLoopbackListenerPid(port),
     port,
     status: 'starting',
     targetCount: 0,
@@ -535,6 +539,19 @@ export function attach(app: DiscoveredApp, cliPath: string, port: number): void 
     watcherPid: watcher.pid ?? 0,
     watcherToken,
   });
+}
+
+function findLoopbackListenerPid(port: number): number | undefined {
+  if (process.platform !== 'darwin') return undefined;
+  try {
+    const output = execFileSync('/usr/sbin/lsof', [
+      '-nP', `-iTCP:${port}`, '-sTCP:LISTEN', '-t',
+    ], { encoding: 'utf8', timeout: 3000 });
+    const pid = Number.parseInt(output.trim().split(/\s+/)[0] || '', 10);
+    return Number.isSafeInteger(pid) && pid > 0 ? pid : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 export function stopSession(appId: string): boolean {

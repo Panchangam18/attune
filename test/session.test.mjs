@@ -934,7 +934,7 @@ ${script}
 
 test('host bindings are extracted and mapped before attunement scripts run', () => {
   const source = `/* @attune-bindings
-{"schemaVersion":1,"attunementId":"codex-multi-chat","appName":"Codex","bindings":[{"name":"main","role":"codex.primaryChat","required":true},{"name":"header","role":"codex.chatHeader","required":false}]}
+{"schemaVersion":1,"attunementId":"codex-multi-chat","appName":"Codex","bindings":[{"name":"main","role":"codex.primaryChat","required":true},{"name":"composer","role":"codex.composer","required":false},{"name":"composerSurface","role":"codex.composerSurface","required":false},{"name":"header","role":"codex.chatHeader","required":false}]}
 @end-attune-bindings */
 
 [data-attune-host-roles~="codex.primaryChat"] { display: flex; }
@@ -943,6 +943,57 @@ test('host bindings are extracted and mapped before attunement scripts run', () 
 window.__mappedBeforeScript = Boolean(window.__attuneHost?.resolve('codex.primaryChat'));
 @end-attune-script */`;
   const attributes = new Map();
+  const composerPaintSurface = {
+    isConnected: true,
+    tagName: 'DIV',
+    classList: ['bg-token-input-background'],
+    querySelectorAll() { return []; },
+    getAttribute() { return ''; },
+    setAttribute(name, value) { attributes.set(`composer-paint-surface:${name}`, value); },
+    removeAttribute(name) { attributes.delete(`composer-paint-surface:${name}`); },
+    getBoundingClientRect() { return { width: 696, height: 92 }; },
+  };
+  const composerEditor = {
+    isConnected: true,
+    tagName: 'DIV',
+    classList: [],
+    parentElement: composerPaintSurface,
+    querySelectorAll() { return []; },
+    getAttribute(name) { return name === 'role' ? 'textbox' : ''; },
+    setAttribute(name, value) { attributes.set(`composer-editor:${name}`, value); },
+    removeAttribute(name) { attributes.delete(`composer-editor:${name}`); },
+    getBoundingClientRect() { return { width: 680, height: 44 }; },
+  };
+  composerPaintSurface.contains = element => element === composerEditor;
+  const composerChrome = {
+    isConnected: true,
+    tagName: 'DIV',
+    classList: ['composer-surface-chrome'],
+    querySelectorAll(selector) {
+      return selector.includes('bg-token-input-background') ? [composerPaintSurface] : [];
+    },
+    getAttribute() { return ''; },
+    setAttribute(name, value) { attributes.set(`composer-chrome:${name}`, value); },
+    removeAttribute(name) { attributes.delete(`composer-chrome:${name}`); },
+    getBoundingClientRect() { return { width: 700, height: 96 }; },
+  };
+  composerPaintSurface.parentElement = composerChrome;
+  const composerRoot = {
+    isConnected: true,
+    tagName: 'DIV',
+    classList: [],
+    querySelectorAll(selector) {
+      if (selector === '.composer-surface-chrome') return [composerChrome];
+      if (selector.startsWith('#prompt-textarea')) return [composerEditor];
+      return [];
+    },
+    getAttribute(name) { return name === 'data-codex-composer-root' ? 'true' : ''; },
+    setAttribute(name, value) { attributes.set(`composer-root:${name}`, value); },
+    removeAttribute(name) { attributes.delete(`composer-root:${name}`); },
+    getBoundingClientRect() { return { width: 736, height: 98 }; },
+  };
+  composerChrome.parentElement = composerRoot;
+  composerRoot.contains = element => [composerChrome, composerPaintSurface, composerEditor].includes(element);
   const header = {
     isConnected: true,
     setAttribute(name, value) { attributes.set(`header:${name}`, value); },
@@ -964,7 +1015,7 @@ window.__mappedBeforeScript = Boolean(window.__attuneHost?.resolve('codex.primar
     classList: { contains(name) { return name === 'main-surface'; } },
     hasAttribute(name) { return name === 'data-app-shell-main-surface'; },
     querySelector(selector) {
-      if (selector === '[data-codex-composer-root]') return {};
+      if (selector === '[data-codex-composer-root]') return composerRoot;
       if (selector === '[data-app-action-timeline-scroll]') return {};
       if (selector === 'button[aria-label="Chat actions"]') return action;
       return null;
@@ -990,6 +1041,8 @@ window.__mappedBeforeScript = Boolean(window.__attuneHost?.resolve('codex.primar
     },
     querySelectorAll(selector) {
       if (selector === 'main') return [main];
+      if (selector === '[data-codex-composer-root]') return [composerRoot];
+      if (selector.startsWith('#prompt-textarea')) return [composerEditor];
       if (selector === 'button[aria-label="Chat actions"]') return [action];
       return [];
     },
@@ -1024,6 +1077,9 @@ window.__mappedBeforeScript = Boolean(window.__attuneHost?.resolve('codex.primar
   assert.equal(vm.runInNewContext(buildStyleInjectionExpression(source), context), 'applied');
   assert.equal(window.__mappedBeforeScript, true);
   assert.equal(attributes.get('main:data-attune-host-roles'), 'codex.primaryChat');
+  assert.equal(attributes.get('composer-root:data-attune-host-roles'), 'codex.composer');
+  assert.equal(attributes.get('composer-paint-surface:data-attune-host-roles'), undefined);
+  assert.equal(attributes.get('composer-chrome:data-attune-host-roles'), 'codex.composerSurface');
   assert.equal(attributes.get('header:data-attune-host-roles'), 'codex.chatHeader');
   assert.equal(window.__attuneCompatibilityReports['codex-multi-chat'].status, 'compatible');
 });
@@ -1193,10 +1249,18 @@ test('host mapper rejects ambiguous fingerprint matches', () => {
 
 test('semantic host roles are published as an agent-readable catalog', () => {
   assert.equal(HOST_ROLE_CATALOG['codex.primaryChat'].app, 'Codex');
+  assert.equal(
+    HOST_ROLE_CATALOG['codex.composer'].description,
+    'The outer composer component and layout container. It may be transparent or extend behind rounded corners; do not use it to recolor the visible chat box. Use codex.composerSurface instead.',
+  );
+  assert.match(HOST_ROLE_CATALOG['codex.composerSurface'].description, /style this one role directly/i);
+  assert.match(HOST_ROLE_CATALOG['chatgpt.composer'].description, /inner prompt text-entry editor only/i);
+  assert.match(HOST_ROLE_CATALOG['chatgpt.composer'].description, /excludes the composer surface/i);
+  assert.match(HOST_ROLE_CATALOG['chatgpt.composer'].description, /use codex\.composerSurface when styling the visible rounded chat box/i);
   assert.equal(HOST_ROLE_CATALOG['claude.modelPicker'].app, 'Claude');
   assert.match(HOST_ROLE_CATALOG['slack.composer'].description, /composer/i);
   assert.match(HOST_ROLE_CATALOG['slack.primaryView'].description, /channel|conversation/i);
-  assert.equal(Object.keys(HOST_ROLE_CATALOG).length, 36);
+  assert.equal(Object.keys(HOST_ROLE_CATALOG).length, 37);
 });
 
 test('host fingerprints round-trip in isolated per-app stores and reject corrupt data', async t => {
@@ -1255,20 +1319,23 @@ test('stylesheet reads live source edits and falls back to the saved CSS', async
   assert.equal(readStylesheet(configPath), 'body { color: black; }');
 });
 
-test('scanner recognizes Electron and Chromium Embedded Framework app bundles', async (t) => {
+test('scanner recognizes Electron, CEF, and Chrome app bundles', async (t) => {
   const root = await mkdtemp(join(tmpdir(), 'attune-runtime-'));
   const electronPath = join(root, 'Electron.app');
   const cefPath = join(root, 'Spotify.app');
   const codexPath = join(root, 'ChatGPT.app');
+  const chromePath = join(root, 'Google Chrome.app');
 
   t.after(() => rm(root, { recursive: true, force: true }));
 
   await mkdir(join(electronPath, 'Contents', 'Frameworks', 'Electron Framework.framework'), { recursive: true });
   await mkdir(join(cefPath, 'Contents', 'Frameworks', 'Chromium Embedded Framework.framework'), { recursive: true });
   await mkdir(join(codexPath, 'Contents', 'Frameworks', 'Codex Framework.framework'), { recursive: true });
+  await mkdir(join(chromePath, 'Contents', 'Frameworks', 'Google Chrome Framework.framework'), { recursive: true });
 
   assert.equal(getChromiumRuntime(electronPath), 'electron');
   assert.equal(getChromiumRuntime(cefPath), 'cef');
   assert.equal(getChromiumRuntime(codexPath), 'cef');
+  assert.equal(getChromiumRuntime(chromePath), 'chrome');
   assert.equal(getChromiumRuntime(join(root, 'Notes.app')), null);
 });

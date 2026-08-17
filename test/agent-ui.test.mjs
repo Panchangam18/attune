@@ -52,11 +52,26 @@ test('agent CSS rejects invented semantic roles', () => {
   ), /Unknown Attune semantic role: example\.guessed/);
 });
 
+test('Codex composer surface styling does not synthesize corner geometry', () => {
+  const css = '[data-attune-host-roles~="codex.composerSurface"] { background: hotpink; }';
+  const style = buildAgentStyleSource('com.openai.codex', 'ChatGPT', css);
+  const parsed = splitWorkspaceSource(style.source);
+
+  assert.doesNotMatch(parsed.css, /overflow: hidden/);
+  assert.doesNotMatch(parsed.css, /border-radius/);
+  assert.equal(parsed.css, css);
+  assert.deepEqual(parsed.bindingSets[0].bindings.map(binding => binding.role), [
+    'codex.composerSurface',
+  ]);
+});
+
 test('ChatGPT semantic catalog includes both ChatGPT and Codex host surfaces', () => {
   const catalog = getRoleCatalogForApp('ChatGPT', 'com.openai.codex');
   assert.ok(catalog['document.body']);
   assert.ok(catalog['chatgpt.composer']);
   assert.ok(catalog['codex.primaryChat']);
+  assert.match(catalog['codex.composer'].description, /use codex\.composerSurface/i);
+  assert.match(catalog['codex.composerSurface'].description, /complete visible rounded chatbox surface/i);
   assert.equal(catalog['slack.composer'], undefined);
 });
 

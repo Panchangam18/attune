@@ -12,7 +12,8 @@ export const HOST_ROLE_CATALOG: Record<string, HostRoleCatalogEntry> = {
   'document.root': { app: 'Document', description: 'The document element.' },
   'document.body': { app: 'Document', description: 'The document body.' },
   'codex.primaryChat': { app: 'Codex', description: 'The primary conversation surface.' },
-  'codex.composer': { app: 'Codex', description: 'The prompt composer root.' },
+  'codex.composer': { app: 'Codex', description: 'The outer composer component and layout container. It may be transparent or extend behind rounded corners; do not use it to recolor the visible chat box. Use codex.composerSurface instead.' },
+  'codex.composerSurface': { app: 'Codex', description: 'The complete visible rounded chatbox surface, spanning its painted chrome and content layers. Style this one role directly for the whole chat box background color, border, corner radius, or shadow.' },
   'codex.appShell': { app: 'Codex', description: 'The shell containing the primary chat and sidebar.' },
   'codex.timeline': { app: 'Codex', description: 'The conversation timeline scroller.' },
   'codex.chatActions': { app: 'Codex', description: 'The chat actions control.' },
@@ -22,7 +23,7 @@ export const HOST_ROLE_CATALOG: Record<string, HostRoleCatalogEntry> = {
   'codex.modelPicker': { app: 'Codex', description: 'The model picker in the composer.' },
   'codex.submitButton': { app: 'Codex', description: 'The primary Send or Stop action in the composer.' },
   'chatgpt.conversation': { app: 'ChatGPT', description: 'The active conversation surface.' },
-  'chatgpt.composer': { app: 'ChatGPT', description: 'The prompt composer.' },
+  'chatgpt.composer': { app: 'ChatGPT', description: 'The inner prompt text-entry editor only. It excludes the composer surface, toolbar, controls, border, and background; use codex.composerSurface when styling the visible rounded chat box.' },
   'chatgpt.attachmentMenu': { app: 'ChatGPT', description: 'The attachment or upload menu.' },
   'claude.appShell': { app: 'Claude', description: 'The Claude Desktop application shell.' },
   'claude.primaryChat': { app: 'Claude', description: 'The active Claude conversation or Code session.' },
@@ -47,7 +48,7 @@ export const HOST_ROLE_CATALOG: Record<string, HostRoleCatalogEntry> = {
   'youtube.player': { app: 'YouTube', description: 'The primary video player.' },
 };
 
-export const HOST_MAPPER_VERSION = 9;
+export const HOST_MAPPER_VERSION = 20;
 
 /**
  * This function is serialized into the target renderer. Keep it self-contained:
@@ -78,6 +79,7 @@ function installHostMapper(bindingSets: unknown[], savedFingerprints: Record<str
     description: string;
     candidates: string;
     resolve: (context: ResolverContext) => ElementLike | null;
+    related?: (context: ResolverContext, primary: ElementLike) => ElementLike[];
   };
   type ResolverContext = {
     visible: (element: ElementLike | null | undefined) => boolean;
@@ -89,6 +91,7 @@ function installHostMapper(bindingSets: unknown[], savedFingerprints: Record<str
   const fingerprintMargin = 0.12;
   const validationThreshold = 0.48;
   const mappedElements = new Map<string, ElementLike>();
+  let mappedRoleElements = new Set<ElementLike>();
   const resolutions = new Map<string, Resolution>();
   const learnedFingerprints = new Map<string, Fingerprint>();
   const listeners = new Set<(roles: string[]) => void>();
@@ -257,7 +260,48 @@ function installHostMapper(bindingSets: unknown[], savedFingerprints: Record<str
         .filter(candidate => candidate.score >= 8)
         .sort((left, right) => right.score - left.score)[0]?.element || null,
     },
-    'codex.composer': { description: 'The prompt composer root.', candidates: '[data-codex-composer-root], form, [contenteditable="true"]', resolve: c => c.first('[data-codex-composer-root]') },
+    'codex.composer': {
+      description: 'The outer composer component and layout container. It may be transparent or extend behind rounded corners; do not use it to recolor the visible chat box. Use codex.composerSurface instead.',
+      candidates: '[data-codex-composer-root], form, [contenteditable="true"]',
+      resolve: c => c.first('[data-codex-composer-root]'),
+    },
+    'codex.composerSurface': {
+      description: 'The complete visible rounded chatbox surface, spanning its painted chrome and content layers. Style this one role directly for the whole chat box background color, border, corner radius, or shadow.',
+      candidates: '.composer-surface-chrome, [class*="bg-token-input-background"], [class*="bg-token-dropdown-background"], [data-codex-composer-root]',
+      resolve: c => {
+        const root = c.first('[data-codex-composer-root]');
+        const chrome = c.first('.composer-surface-chrome', root || document);
+        if (chrome) return chrome;
+        const editor = c.first(
+          '#prompt-textarea, [contenteditable="true"][role="textbox"], [contenteditable="true"][data-lexical-editor="true"], textarea',
+          root || document,
+        );
+        if (!editor) return root;
+        const editorBounds = editor.getBoundingClientRect();
+        let fallback: ElementLike | null = null;
+        let candidate = editor.parentElement as ElementLike | null;
+        while (candidate && candidate !== root) {
+          const bounds = candidate.getBoundingClientRect();
+          if (
+            bounds.width >= editorBounds.width
+            && bounds.width <= editorBounds.width + 96
+            && bounds.height >= editorBounds.height + 24
+          ) {
+            fallback ||= candidate;
+            const style = typeof getComputedStyle === 'function' ? getComputedStyle(candidate) : null;
+            const radius = Math.max(
+              Number.parseFloat(style?.borderTopLeftRadius || style?.borderRadius || '0') || 0,
+              Number.parseFloat(style?.borderTopRightRadius || style?.borderRadius || '0') || 0,
+              Number.parseFloat(style?.borderBottomRightRadius || style?.borderRadius || '0') || 0,
+              Number.parseFloat(style?.borderBottomLeftRadius || style?.borderRadius || '0') || 0,
+            );
+            if (radius > 0) return candidate;
+          }
+          candidate = candidate.parentElement as ElementLike | null;
+        }
+        return fallback || root;
+      },
+    },
     'codex.appShell': {
       description: 'The shell containing chat and sidebar.', candidates: 'main, [class*="shell"], #root > div',
       resolve: c => {
@@ -299,7 +343,7 @@ function installHostMapper(bindingSets: unknown[], savedFingerprints: Record<str
   };
   const chatgptRoles: Record<string, RoleDefinition> = {
     'chatgpt.conversation': { description: 'The active conversation surface.', candidates: 'main, [role="main"], section', resolve: () => ([...document.querySelectorAll('main, [role="main"]')] as ElementLike[]).map(element => ({ element, score: chatGptConversationScore(element) })).filter(candidate => candidate.score >= 3).sort((left, right) => right.score - left.score)[0]?.element || null },
-    'chatgpt.composer': { description: 'The prompt composer.', candidates: '#prompt-textarea, form, [contenteditable="true"], textarea', resolve: c => c.first('#prompt-textarea, form[data-type="unified-composer"] textarea, form[data-type="unified-composer"] [contenteditable="true"], [contenteditable="true"][role="textbox"], [contenteditable="true"][data-lexical-editor="true"], textarea') },
+    'chatgpt.composer': { description: 'The inner prompt text-entry editor only. It excludes the outer chatbox container, toolbar, controls, border, and background; use codex.composer when styling the whole chat box.', candidates: '#prompt-textarea, form, [contenteditable="true"], textarea', resolve: c => c.first('#prompt-textarea, form[data-type="unified-composer"] textarea, form[data-type="unified-composer"] [contenteditable="true"], [contenteditable="true"][role="textbox"], [contenteditable="true"][data-lexical-editor="true"], textarea') },
     'chatgpt.attachmentMenu': { description: 'The attachment menu.', candidates: '[role="menu"], [data-radix-popper-content-wrapper], .popover', resolve: () => ([...document.querySelectorAll('[data-radix-popper-content-wrapper] .popover, div.popover, [role="menu"]')] as ElementLike[]).find(element => visible(element) && /Add photos|Attach|Upload/i.test(element.textContent || '')) || null },
   };
   const claudeRoles: Record<string, RoleDefinition> = {
@@ -484,6 +528,7 @@ function installHostMapper(bindingSets: unknown[], savedFingerprints: Record<str
   const reconcile = () => {
     if (disposed) return;
     const previous = new Map(mappedElements);
+    const previousRoleElements = mappedRoleElements;
     const rolesByElement = new Map<ElementLike, Set<string>>();
     mappedElements.clear();
     resolutions.clear();
@@ -492,14 +537,21 @@ function installHostMapper(bindingSets: unknown[], savedFingerprints: Record<str
       if (!element) continue;
       mappedElements.set(role, element);
       learnedFingerprints.set(role, captureFingerprint(element));
-      const roles = rolesByElement.get(element) || new Set<string>();
-      roles.add(role);
-      rolesByElement.set(element, roles);
+      let roleElements = [element];
+      try {
+        roleElements = [...new Set([element, ...(registry[role].related?.(context, element) || [])])];
+      } catch {}
+      for (const roleElement of roleElements) {
+        const roles = rolesByElement.get(roleElement) || new Set<string>();
+        roles.add(role);
+        rolesByElement.set(roleElement, roles);
+      }
     }
-    for (const element of new Set(previous.values())) {
+    for (const element of previousRoleElements) {
       if (!rolesByElement.has(element)) setElementRoles(element, new Set());
     }
     for (const [element, roles] of rolesByElement) setElementRoles(element, roles);
+    mappedRoleElements = new Set(rolesByElement.keys());
     const reports = Object.fromEntries(activeBindingSets.map(set => {
       const capabilities = Object.fromEntries(set.bindings.map(binding => {
         const resolution = resolutions.get(binding.role);
@@ -571,8 +623,9 @@ function installHostMapper(bindingSets: unknown[], savedFingerprints: Record<str
       disposed = true;
       observer.disconnect();
       if (frame) cancelAnimationFrame(frame);
-      for (const element of new Set(mappedElements.values())) setElementRoles(element, new Set());
+      for (const element of mappedRoleElements) setElementRoles(element, new Set());
       mappedElements.clear();
+      mappedRoleElements.clear();
       listeners.clear();
     },
   };
