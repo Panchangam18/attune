@@ -12,6 +12,13 @@ test('agent skill has complete metadata and safety boundaries', () => {
   assert.doesNotMatch(skill, /TODO/);
   assert.match(skill, /attune elements "App Name"/);
   assert.match(skill, /attune style "App Name" --css/);
+  assert.match(skill, /attune present "App Name" --role app\.role --output .* --live/);
+  assert.match(skill, /returned `contentReference` exactly once/);
+  assert.match(skill, /pointer, keyboard, editing, and scrolling bridge/);
+  assert.match(skill, /static screenshot fallback/);
+  assert.match(skill, /host supports inline visualization content references/);
+  assert.match(skill, /attune present "Safari" --selector/);
+  assert.match(skill, /Do not accept or execute page JavaScript/);
   assert.match(skill, /exactly two calls/);
   assert.match(skill, /one call/);
   assert.match(skill, /Do not prepend `scan`, `status`, `roles`, or `inspect`/);
@@ -32,5 +39,5 @@ test('skill package includes agent metadata and examples', () => {
   assert.ok(packageJson.files.includes('examples'));
   assert.equal(packageJson.dependencies, undefined);
   assert.match(openaiMetadata, /display_name: "Attune"/);
-  assert.match(openaiMetadata, /Use \$attune to restyle an open Chromium desktop app through its semantic element map/);
+  assert.match(openaiMetadata, /Use \$attune to restyle an open Chromium desktop app or smuggle one interactive semantic component inline/);
 });

@@ -4,16 +4,24 @@ import { existsSync, readFileSync } from 'fs';
 import { resolve } from 'path';
 import { setStylesheetSource } from './config.js';
 import { buildAgentStyleSource, getRoleCatalogForApp } from './agent-ui.js';
+import {
+  assertLiveComponentBrokerAvailable,
+  createLiveComponentPresentation,
+  writeComponentPresentation,
+} from './component-presentation.js';
 import { HOST_ROLE_CATALOG } from './host-roles.js';
 import { scanForSupportedApps, findApp, getAppId } from './scan.js';
 import {
   attach,
   compactInspection,
   compactSemanticElements,
+  captureSemanticComponent,
   elements,
   getSession,
   inspect,
   launch,
+  prepareSafariComponentSmuggleSource,
+  prepareSemanticComponentSmuggleSource,
   runWatcher,
   stopSession,
   waitForSemanticStyle,
@@ -53,6 +61,9 @@ async function main(command: string | undefined, args: string[]) {
       break;
     case 'roles':
       cmdRoles(args[0]);
+      break;
+    case 'present':
+      await cmdPresent(args);
       break;
     case '_watch':
       await cmdWatch(args[0], args[1], args[2], args[3]);
@@ -308,6 +319,73 @@ async function cmdElements(args: string[]) {
   }
 }
 
+async function cmdPresent(args: string[]) {
+  const query = args[0];
+  const roleIndex = args.indexOf('--role');
+  const selectorIndex = args.indexOf('--selector');
+  const outputIndex = args.indexOf('--output');
+  const descriptionIndex = args.indexOf('--description');
+  const safariWindowIndex = args.indexOf('--safari-window');
+  const safariTabIndex = args.indexOf('--safari-tab');
+  const role = roleIndex >= 0 ? args[roleIndex + 1] : undefined;
+  const selector = selectorIndex >= 0 ? args[selectorIndex + 1] : undefined;
+  const outputPath = outputIndex >= 0 ? args[outputIndex + 1] : undefined;
+  const description = descriptionIndex >= 0 ? args[descriptionIndex + 1] : undefined;
+  const safariWindowId = safariWindowIndex >= 0 ? Number(args[safariWindowIndex + 1]) : undefined;
+  const safariTabId = safariTabIndex >= 0 ? Number(args[safariTabIndex + 1]) : undefined;
+  const isSafari = query?.trim().toLowerCase() === 'safari';
+  if (!query || !outputPath || (isSafari ? !selector : !role)) {
+    console.error('Usage: attune present <app-name> (--role <semantic-role> | --selector <safari-css-selector>) --output <html-file> [--live]');
+    process.exit(1);
+  }
+  if (isSafari) {
+    if (!args.includes('--live')) {
+      console.error('Safari component presentation currently requires --live.');
+      process.exit(1);
+    }
+    try {
+      assertLiveComponentBrokerAvailable();
+      const result = createLiveComponentPresentation(
+        resolve(outputPath),
+        await prepareSafariComponentSmuggleSource(
+          selector!,
+          description || 'Safari page component',
+          { windowId: safariWindowId, tabIndex: safariTabId },
+        ),
+      );
+      console.log(JSON.stringify(result, null, 2));
+    } catch (error: unknown) {
+      console.error('Failed to present "Safari":', (error as Error).message);
+      process.exit(1);
+    }
+    return;
+  }
+  const app = findApp(scanForSupportedApps(), query);
+  if (!app) {
+    console.error(`No supported Chromium app found matching "${query}".`);
+    process.exit(1);
+  }
+  try {
+    let result;
+    if (args.includes('--live')) {
+      assertLiveComponentBrokerAvailable();
+      result = createLiveComponentPresentation(
+        resolve(outputPath),
+        await prepareSemanticComponentSmuggleSource(app, role!),
+      );
+    } else {
+      result = writeComponentPresentation(
+        resolve(outputPath),
+        await captureSemanticComponent(app, role!),
+      );
+    }
+    console.log(JSON.stringify(result, null, 2));
+  } catch (error: unknown) {
+    console.error(`Failed to present "${app.name}":`, (error as Error).message);
+    process.exit(1);
+  }
+}
+
 function cmdRoles(query: string | undefined) {
   let catalog = HOST_ROLE_CATALOG;
   if (query) {
@@ -357,6 +435,14 @@ Usage:
     --file <path>                    Read CSS from a durable file instead
     --clear                          Remove Attune-managed CSS
   attune roles [app-name]            List the static semantic role catalog
+  attune present <app-name>          Capture one semantic component for inline conversation display
+    --role <semantic-role>           Use an exact role returned by attune elements
+    --selector <css-selector>        Resolve one component in Safari's front tab
+    --description <text>             Label a Safari page component
+    --safari-window <id>             Target a validated non-front Safari window
+    --safari-tab <index>             Target a validated tab in that window
+    --output <html-file>             Write a self-contained visualization fragment under 1 MB
+    --live                           Connect the fragment to Attune App's interactive smuggling bridge
   attune launch <app-name>           Launch without modifying the app bundle
   attune attach <app-name> <port>    Attach to an app already running with DevTools
   attune status <app-name>           Show an Attune session

@@ -1,4 +1,4 @@
 interface:
   display_name: "Attune"
-  short_description: "Style desktop apps through semantic UI roles"
-  default_prompt: "Use $attune to restyle an open Chromium desktop app through its semantic element map."
+  short_description: "Style or smuggle live desktop components"
+  default_prompt: "Use $attune to restyle an open Chromium desktop app or smuggle one interactive semantic component inline."

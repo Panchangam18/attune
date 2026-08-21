@@ -47,6 +47,27 @@ bindings with the CSS, and verifies the result in the attached renderer. Use
 `inspect` separately for raw selector diagnostics and `roles` for the static
 semantic catalog.
 
+In Codex and other hosts with an inline visualization renderer, an agent can
+present one resolved component beside its explanation:
+
+```sh
+attune present "Slack" --role slack.composer --output "/absolute/task-visualization-directory/slack-composer.html" --live
+```
+
+The command writes a private, responsive destination slot and asks the running
+Attune App to attach its existing component-smuggling bridge to the Codex
+visualization webview. Pointer, keyboard, editing, and scrolling events relay to
+the source component while its live visual state streams back. The JSON result
+includes the exact `contentReference` the agent should emit. Omit `--live` for a
+point-in-time, networkless screenshot fallback.
+
+Safari page components use the same bridge through the front tab's bounded
+Apple Events client:
+
+```sh
+attune present "Safari" --selector '.graph-before-activity-overview' --description "GitHub contribution graph" --output "/absolute/task-visualization-directory/github-graph.html" --live
+```
+
 `launch` starts the ordinary app executable with a localhost-only DevTools port.
 The Attune sidecar discovers its renderer windows and manages one stylesheet in
 each. Saving the source CSS file applies edits live; the app bundle, ASAR files,

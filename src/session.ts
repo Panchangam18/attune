@@ -29,6 +29,11 @@ import {
 } from './host-roles.js';
 import { getRoleCatalogForApp } from './agent-ui.js';
 import { type DiscoveredApp, getAppExecutablePath, getAppId } from './scan.js';
+import type {
+  ComponentSmuggleFingerprint,
+  PreparedComponentSmuggleSource,
+  SemanticComponentCapture,
+} from './component-presentation.js';
 
 export { buildHostFingerprintProbeExpression };
 
@@ -194,6 +199,19 @@ export interface AppliedStyleResult {
   unavailableRoles: string[];
 }
 
+interface SemanticComponentBounds {
+  role: string;
+  description: string;
+  bounds: { x: number; y: number; width: number; height: number };
+  viewport: { width: number; height: number; deviceScaleFactor: number };
+  resolution: SemanticElement['resolution'];
+  fingerprints: Record<string, unknown>;
+}
+
+interface SemanticComponentAnchorValue extends SemanticComponentBounds {
+  fingerprint: ComponentSmuggleFingerprint;
+}
+
 export interface HostBinding {
   name: string;
   role: string;
@@ -333,15 +351,22 @@ export async function launch(app: DiscoveredApp, cliPath: string): Promise<{ por
     const claudeWebLaunch = claudeWebProxyOptions
       ? await waitForClaudeWebBootstrapProxy(claudeWebProxyOptions)
       : null;
+    const backgroundExecutionArguments = [
+      '--disable-background-timer-throttling',
+      '--disable-backgrounding-occluded-windows',
+      '--disable-renderer-backgrounding',
+    ];
     const launchArguments = claudeWebLaunch
       ? [
         `--proxy-pac-url=${claudeWebLaunch.proxyPacUrl}`,
         `--ignore-certificate-errors-spki-list=${claudeWebLaunch.spkiHash}`,
+        ...backgroundExecutionArguments,
       ]
       : [
         '--remote-debugging-address=127.0.0.1',
         `--remote-debugging-port=${port}`,
         '--remote-allow-origins=http://localhost',
+        ...backgroundExecutionArguments,
         ...(chromeProfilePath
           ? [`--user-data-dir=${chromeProfilePath}`, '--no-first-run', '--no-default-browser-check']
           : []),
@@ -734,6 +759,269 @@ export async function elements(
     session: { status: session.status, port: session.port, targetCount: session.targetCount },
     pages,
   };
+}
+
+/** Capture one resolved semantic component without exposing the surrounding page. */
+export async function captureSemanticComponent(
+  app: DiscoveredApp,
+  role: string,
+): Promise<SemanticComponentCapture> {
+  const appId = getAppId(app);
+  const session = requireAttachedSession(app);
+  const roleCatalog = getRoleCatalogForApp(app.name, app.bundleId);
+  const definition = roleCatalog[role];
+  if (!definition) {
+    throw new Error(`Unknown semantic role "${role}" for "${app.name}". Run attune elements first and use one of its returned roles.`);
+  }
+  const targets = (await getDebugTargets(session.port))
+    .filter(target => target.type === 'page' && target.webSocketDebuggerUrl);
+  if (targets.length === 0) {
+    throw new Error(`No semantic page targets are available for "${app.name}".`);
+  }
+
+  const savedFingerprints = readHostFingerprints(appId);
+  const candidates: Array<{ webSocketUrl: string; component: SemanticComponentBounds }> = [];
+  let learnedFingerprints = savedFingerprints;
+  for (const target of targets) {
+    const evaluated = await sendDevToolsCommand<{
+      result?: { value?: SemanticComponentBounds | null };
+      exceptionDetails?: unknown;
+    }>(target.webSocketDebuggerUrl!, 'Runtime.evaluate', {
+      expression: buildSemanticComponentExpression(role, roleCatalog, savedFingerprints),
+      returnByValue: true,
+    });
+    const component = evaluated.result?.value;
+    if (evaluated.exceptionDetails || !component) continue;
+    learnedFingerprints = { ...learnedFingerprints, ...component.fingerprints };
+    candidates.push({ webSocketUrl: target.webSocketDebuggerUrl!, component });
+  }
+  if (Object.keys(learnedFingerprints).length > 0) writeHostFingerprints(appId, learnedFingerprints);
+  const selected = candidates.sort((left, right) => (
+    right.component.resolution.confidence - left.component.resolution.confidence
+      || right.component.bounds.width * right.component.bounds.height
+        - left.component.bounds.width * left.component.bounds.height
+  ))[0];
+  if (!selected) {
+    throw new Error(`Semantic role "${role}" is not currently visible in "${app.name}".`);
+  }
+
+  await sendDevToolsCommand(selected.webSocketUrl, 'Page.enable', {});
+  const deviceScaleFactor = Math.max(1, Math.min(2, selected.component.viewport.deviceScaleFactor || 1));
+  const attempts = [
+    { quality: 88, scale: deviceScaleFactor },
+    { quality: 74, scale: Math.min(1.5, deviceScaleFactor) },
+    { quality: 58, scale: 1 },
+    { quality: 42, scale: 0.75 },
+  ];
+  let imageBase64 = '';
+  for (const attempt of attempts) {
+    const screenshot = await sendDevToolsCommand<{ data?: string }>(
+      selected.webSocketUrl,
+      'Page.captureScreenshot',
+      {
+        format: 'jpeg',
+        quality: attempt.quality,
+        fromSurface: true,
+        captureBeyondViewport: false,
+        clip: { ...selected.component.bounds, scale: attempt.scale },
+      },
+    );
+    if (screenshot.data && screenshot.data.length < 975_000) {
+      imageBase64 = screenshot.data;
+      break;
+    }
+  }
+  if (!imageBase64) {
+    throw new Error(`Semantic role "${role}" is too large to present as an inline visualization.`);
+  }
+
+  return {
+    appId,
+    appName: app.name,
+    role,
+    description: definition.description,
+    capturedAt: new Date().toISOString(),
+    width: selected.component.bounds.width,
+    height: selected.component.bounds.height,
+    imageMimeType: 'image/jpeg',
+    imageBase64,
+    resolution: selected.component.resolution,
+  };
+}
+
+/** Resolve and retain one semantic source for Attune App's live smuggling bridge. */
+export async function prepareSemanticComponentSmuggleSource(
+  app: DiscoveredApp,
+  role: string,
+): Promise<PreparedComponentSmuggleSource> {
+  const appId = getAppId(app);
+  const session = requireAttachedSession(app);
+  const roleCatalog = getRoleCatalogForApp(app.name, app.bundleId);
+  const definition = roleCatalog[role];
+  if (!definition) {
+    throw new Error(`Unknown semantic role "${role}" for "${app.name}". Run attune elements first and use one of its returned roles.`);
+  }
+  const targets = (await getDebugTargets(session.port))
+    .filter(target => target.type === 'page' && target.webSocketDebuggerUrl);
+  const savedFingerprints = readHostFingerprints(appId);
+  const token = randomUUID();
+  const candidates: Array<{ webSocketUrl: string; component: SemanticComponentAnchorValue }> = [];
+  let learnedFingerprints = savedFingerprints;
+  for (const target of targets) {
+    const evaluated = await sendDevToolsCommand<{
+      result?: { value?: SemanticComponentAnchorValue | null };
+      exceptionDetails?: unknown;
+    }>(target.webSocketDebuggerUrl!, 'Runtime.evaluate', {
+      expression: buildSemanticComponentAnchorExpression(role, token, roleCatalog, savedFingerprints),
+      returnByValue: true,
+    });
+    const component = evaluated.result?.value;
+    if (evaluated.exceptionDetails || !component) continue;
+    learnedFingerprints = { ...learnedFingerprints, ...component.fingerprints };
+    candidates.push({ webSocketUrl: target.webSocketDebuggerUrl!, component });
+  }
+  if (Object.keys(learnedFingerprints).length > 0) writeHostFingerprints(appId, learnedFingerprints);
+  const selected = candidates.sort((left, right) => (
+    right.component.resolution.confidence - left.component.resolution.confidence
+      || right.component.bounds.width * right.component.bounds.height
+        - left.component.bounds.width * left.component.bounds.height
+  ))[0];
+  if (!selected) {
+    throw new Error(`Semantic role "${role}" is not currently visible in "${app.name}".`);
+  }
+  return {
+    appId,
+    appName: app.name,
+    ...(session.appPid ? { appPid: session.appPid } : {}),
+    webSocketDebuggerUrl: selected.webSocketUrl,
+    anchor: {
+      token,
+      roles: [role],
+      selector: `[data-attune-host-roles~=${JSON.stringify(role)}]`,
+      fingerprint: selected.component.fingerprint,
+      placement: 'inside',
+    },
+    description: definition.description,
+    bounds: selected.component.bounds,
+  };
+}
+
+/** Resolve and retain one CSS-selected component in Safari's front tab. */
+export async function prepareSafariComponentSmuggleSource(
+  selector: string,
+  description = 'Safari page component',
+  page: { windowId?: number; tabIndex?: number } = {},
+): Promise<PreparedComponentSmuggleSource> {
+  if (process.platform !== 'darwin') throw new Error('Safari component presentation is available only on macOS.');
+  if (!selector || selector.length > 500) throw new Error('Safari component selector must contain 1–500 characters.');
+  const hasExplicitPage = page.windowId !== undefined || page.tabIndex !== undefined;
+  if (hasExplicitPage && (
+    !Number.isSafeInteger(page.windowId) || Number(page.windowId) < 1
+    || !Number.isSafeInteger(page.tabIndex) || Number(page.tabIndex) < 1
+  )) throw new Error('Safari window and tab IDs must be supplied together as positive integers.');
+  const token = randomUUID();
+  const javascript = `JSON.stringify((() => {
+    const selector = ${JSON.stringify(selector)};
+    let element = null;
+    try { element = document.querySelector(selector); } catch { return { ok: false, error: 'The Safari component selector is invalid.' }; }
+    if (!element) return { ok: false, error: 'The Safari component is not present in the front tab.' };
+    const bounds = element.getBoundingClientRect();
+    const style = getComputedStyle(element);
+    if (bounds.width < 1 || bounds.height < 1 || style.display === 'none' || style.visibility === 'hidden') {
+      return { ok: false, error: 'The Safari component is not currently visible.' };
+    }
+    const clean = (value) => String(value || '').replace(/\\s+/g, ' ').trim().slice(0, 160);
+    const attributes = {};
+    for (const name of ['aria-label', 'title', 'data-testid', 'data-test-selector', 'id']) {
+      const value = element.getAttribute?.(name);
+      if (value && value.length < 160) attributes[name] = value;
+    }
+    const ancestor = element.parentElement ? {
+      tag: element.parentElement.tagName?.toLowerCase?.() || '',
+      domRole: clean(element.parentElement.getAttribute?.('role')),
+      label: clean(element.parentElement.getAttribute?.('aria-label') || element.parentElement.getAttribute?.('title')),
+    } : null;
+    globalThis.__attuneSmuggleAnchors ||= {};
+    globalThis.__attuneSmuggleAnchors[${JSON.stringify(token)}] = element;
+    element.setAttribute('data-attune-smuggle-anchor', ${JSON.stringify(token)});
+    return {
+      ok: true,
+      title: document.title,
+      url: location.href,
+      bounds: { x: bounds.x, y: bounds.y, width: bounds.width, height: bounds.height },
+      anchor: {
+        token: ${JSON.stringify(token)},
+        roles: [],
+        selector,
+        placement: 'inside',
+        fingerprint: {
+          tag: element.tagName?.toLowerCase?.() || '',
+          domRole: clean(element.getAttribute?.('role')),
+          label: clean(element.getAttribute?.('aria-label') || element.getAttribute?.('title')),
+          text: clean(element.innerText || element.textContent),
+          attributes,
+          classes: [...(element.classList || [])].filter(name => name.length < 80).slice(0, 12),
+          ancestor,
+        },
+      },
+    };
+  })())`;
+  const script = `if application "Safari" is not running then error "Safari is not running"
+tell application "Safari"
+  if (count of windows) is 0 then error "Safari has no open windows"
+  ${hasExplicitPage ? `set sourceWindow to window id ${page.windowId}\n  set sourceTab to tab ${page.tabIndex} of sourceWindow` : 'set sourceWindow to front window\n  set sourceTab to current tab of sourceWindow'}
+  set packet to do JavaScript ${quoteAppleScriptJavaScript(javascript)} in sourceTab
+  return (id of sourceWindow as text) & "|" & (index of sourceTab as text) & "|" & packet
+end tell`;
+  let raw = '';
+  try {
+    raw = execFileSync('/usr/bin/osascript', ['-e', script], {
+      encoding: 'utf8', timeout: 5_000, maxBuffer: 4 * 1024 * 1024,
+    }).trim();
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    if (/Apple Events|JavaScript/i.test(message)) {
+      throw new Error('Enable Safari Develop → Allow JavaScript from Apple Events, then try again.');
+    }
+    throw new Error(`Unable to inspect Safari's front tab: ${message}`);
+  }
+  const firstSeparator = raw.indexOf('|');
+  const secondSeparator = raw.indexOf('|', firstSeparator + 1);
+  if (firstSeparator < 1 || secondSeparator < 0) throw new Error('Safari returned an invalid component response.');
+  const windowId = Number(raw.slice(0, firstSeparator));
+  const tabIndex = Number(raw.slice(firstSeparator + 1, secondSeparator));
+  const packet = JSON.parse(raw.slice(secondSeparator + 1)) as {
+    ok?: boolean;
+    error?: string;
+    url?: string;
+    bounds?: { x: number; y: number; width: number; height: number };
+    anchor?: PreparedComponentSmuggleSource['anchor'];
+  };
+  if (!packet.ok || !packet.bounds || !packet.anchor) throw new Error(packet.error || 'Safari did not resolve the component.');
+  const appPid = Number.parseInt(execFileSync('/usr/bin/pgrep', ['-x', 'Safari'], {
+    encoding: 'utf8', timeout: 3_000,
+  }).trim().split(/\s+/)[0] || '', 10);
+  if (!Number.isSafeInteger(windowId) || !Number.isSafeInteger(tabIndex) || !Number.isSafeInteger(appPid)) {
+    throw new Error('Safari returned invalid window metadata.');
+  }
+  const safariPage = { appPid, windowId, tabIndex, url: String(packet.url || '') };
+  return {
+    appId: 'com.apple.Safari',
+    appName: 'Safari',
+    appPid,
+    transport: 'safari-apple-events',
+    webSocketDebuggerUrl: `safari://window/${windowId}/tab/${tabIndex}`,
+    safariPage,
+    anchor: packet.anchor,
+    description,
+    bounds: packet.bounds,
+  };
+}
+
+function quoteAppleScriptJavaScript(value: string): string {
+  return `(${value.replace(/\r\n?/g, '\n').split('\n').map(line => (
+    `"${line.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`
+  )).join(' & linefeed & ')})`;
 }
 
 export function compactSemanticElements(result: AppSemanticElements) {
@@ -1870,6 +2158,108 @@ export function buildSemanticElementsExpression(
     fingerprints: mapper.fingerprints?.() || {},
   };
 })()`;
+}
+
+export function buildSemanticComponentExpression(
+  role: string,
+  roleCatalog: Record<string, { app: string; description: string }>,
+  savedFingerprints: Record<string, unknown> = {},
+): string {
+  const definition = roleCatalog[role];
+  const safeRole = JSON.stringify(role);
+  const safeDescription = JSON.stringify(definition?.description || role);
+  const safeFingerprints = JSON.stringify(savedFingerprints);
+  const safeInstaller = getHostMapperInstallerSource();
+  return `(() => {
+  const role = ${safeRole};
+  const bindingSet = {
+    schemaVersion: 2,
+    attunementId: '__attune-agent-present',
+    appName: document.title || 'App',
+    bindings: [{ name: role, role, required: true }],
+  };
+  let mapper = window.__attuneHost;
+  if (!mapper || typeof mapper.request !== 'function') {
+    try { mapper?.cleanup?.(); } catch {}
+    mapper = (${safeInstaller})([], ${safeFingerprints});
+    window.__attuneHost = mapper;
+  }
+  const report = mapper.request(bindingSet) || { capabilities: {} };
+  const element = mapper.resolve(role);
+  if (!element) return null;
+  const rect = element.getBoundingClientRect();
+  const style = getComputedStyle(element);
+  const left = Math.max(0, rect.left);
+  const top = Math.max(0, rect.top);
+  const right = Math.min(innerWidth, rect.right);
+  const bottom = Math.min(innerHeight, rect.bottom);
+  if (
+    style.display === 'none'
+    || style.visibility === 'hidden'
+    || Number(style.opacity || 1) <= 0
+    || right - left < 1
+    || bottom - top < 1
+  ) return null;
+  const capability = report.capabilities?.[role] || {};
+  return {
+    role,
+    description: ${safeDescription},
+    bounds: {
+      x: Math.round(left), y: Math.round(top),
+      width: Math.round(right - left), height: Math.round(bottom - top),
+    },
+    viewport: { width: innerWidth, height: innerHeight, deviceScaleFactor: devicePixelRatio },
+    resolution: {
+      method: capability.method || 'unavailable',
+      confidence: capability.confidence || 0,
+      evidence: capability.evidence || [],
+    },
+    fingerprints: mapper.fingerprints?.() || {},
+  };
+})()`;
+}
+
+export function buildSemanticComponentAnchorExpression(
+  role: string,
+  token: string,
+  roleCatalog: Record<string, { app: string; description: string }>,
+  savedFingerprints: Record<string, unknown> = {},
+): string {
+  const componentExpression = buildSemanticComponentExpression(role, roleCatalog, savedFingerprints);
+  return `(() => {
+    const component = (${componentExpression});
+    if (!component) return null;
+    const role = ${JSON.stringify(role)};
+    const token = ${JSON.stringify(token)};
+    const element = window.__attuneHost?.resolve?.(role);
+    if (!element) return null;
+    const clean = (value, length = 160) => String(value || '').replace(/\\s+/g, ' ').trim().slice(0, length);
+    const stableAttributes = {};
+    for (const name of ['id', 'role', 'aria-label', 'title', 'placeholder', 'name', 'data-testid', 'data-test-id', 'data-qa']) {
+      const value = element.getAttribute?.(name);
+      if (value) stableAttributes[name] = clean(value);
+    }
+    const ancestor = element.parentElement ? {
+      tag: element.parentElement.tagName?.toLowerCase?.() || '',
+      domRole: clean(element.parentElement.getAttribute?.('role')),
+      label: clean(element.parentElement.getAttribute?.('aria-label') || element.parentElement.getAttribute?.('title')),
+    } : null;
+    window.__attuneSmuggleAnchors ||= {};
+    window.__attuneSmuggleAnchors[token] = element;
+    element.setAttribute('data-attune-smuggle-anchor', token);
+    return {
+      ...component,
+      fingerprint: {
+        tag: element.tagName?.toLowerCase?.() || '',
+        domRole: clean(element.getAttribute?.('role')),
+        label: clean(element.getAttribute?.('aria-label') || element.getAttribute?.('title') || element.getAttribute?.('placeholder')),
+        text: clean(element.innerText || element.textContent),
+        attributes: stableAttributes,
+        classes: [...(element.classList || [])].filter(name => name.length < 80).slice(0, 12),
+        ancestor,
+      },
+    };
+  })()`;
 }
 
 export function buildSemanticStyleProbeExpression(expectedStyleHash: string, roles: string[]): string {

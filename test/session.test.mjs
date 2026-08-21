@@ -274,6 +274,9 @@ test('GPT-enabled Claude launch keeps API routing inside the CLI preload', async
   const launchedArguments = await readFile(argumentsPath, 'utf8');
   assert.match(launchedArguments, /--proxy-pac-url=http:\/\/127\.0\.0\.1:\d+\/proxy\.pac/);
   assert.match(launchedArguments, /--ignore-certificate-errors-spki-list=[A-Za-z0-9+/]+=*/);
+  assert.match(launchedArguments, /--disable-background-timer-throttling/);
+  assert.match(launchedArguments, /--disable-backgrounding-occluded-windows/);
+  assert.match(launchedArguments, /--disable-renderer-backgrounding/);
   assert.doesNotMatch(launchedArguments, /remote-debugging/);
   assert.equal(await readFile(baseUrlPath, 'utf8'), 'https://parent-base.example');
   assert.equal(await readFile(firstPartyPath, 'utf8'), 'false');
