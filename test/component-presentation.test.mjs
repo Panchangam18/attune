@@ -8,6 +8,7 @@ import vm from 'node:vm';
 import {
   buildLiveComponentSlotFragment,
   buildComponentPresentationFragment,
+  COMPONENT_SMUGGLE_REQUEST_TTL_MS,
   createLiveComponentPresentation,
   MAX_COMPONENT_VISUALIZATION_BYTES,
   writeComponentPresentation,
@@ -103,6 +104,7 @@ test('live presentation writes a networkless slot and private bridge request', (
     const queued = JSON.parse(readFileSync(join(requestDirectory, requests[0]), 'utf8'));
     assert.equal(queued.source.anchor.token, source.anchor.token);
     assert.equal(queued.target.slotId, `attune-live-${result.requestId}`);
+    assert.equal(Date.parse(queued.expiresAt) - Date.parse(queued.createdAt), COMPONENT_SMUGGLE_REQUEST_TTL_MS);
   } finally {
     rmSync(directory, { recursive: true, force: true });
   }

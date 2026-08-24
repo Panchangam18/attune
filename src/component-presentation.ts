@@ -4,7 +4,10 @@ import { homedir } from 'os';
 import { dirname, join } from 'path';
 
 export const MAX_COMPONENT_VISUALIZATION_BYTES = 1_000_000;
-export const COMPONENT_SMUGGLE_REQUEST_TTL_MS = 2 * 60 * 1000;
+// A conversation host may not mount the final inline visualization until well
+// after the tool call that prepared it. Keep the private request discoverable
+// long enough to survive response rendering, collapsing, and ordinary pauses.
+export const COMPONENT_SMUGGLE_REQUEST_TTL_MS = 30 * 60 * 1000;
 const COMPONENT_SMUGGLE_REQUEST_DIR = join(homedir(), '.attune', 'component-smuggle-requests');
 const COMPONENT_SMUGGLE_BROKER_PATH = join(homedir(), '.attune', 'component-smuggle-broker.json');
 
